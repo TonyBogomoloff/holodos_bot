@@ -1,0 +1,12 @@
+{
+  "data_dir": "data",
+  "allowed_user_ids": [],
+  "codex_binary": "/home/tony/.local/bin/codex",
+  "model": "gpt-5.6-luna",
+  "effort": "low",
+  "workers": 2,
+  "llm_timeout": 240,
+  "daily_actions_per_user": 30,
+  "daily_actions_total": 300,
+  "retention_hours": 24
+}

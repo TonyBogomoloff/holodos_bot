@@ -1,0 +1,21 @@
+[Unit]
+Description=Holodos Telegram recipe bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Desktop/_code/holodos_bot
+ExecStart=%h/Desktop/_code/holodos_bot/current/.venv/bin/python -m holodos_bot run --config %h/Desktop/_code/holodos_bot/config.json --secrets %h/Desktop/_code/config.json
+Environment=PYTHONUNBUFFERED=1
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin
+UMask=0077
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=600
+KillMode=control-group
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
