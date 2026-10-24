@@ -337,7 +337,7 @@ class Bot:
         if applied["view"] == "results":
             await self.show_results(job, state)
         elif applied["view"] == "choices":
-            rows = [[{"text": f"{i + 1}. {r['title_ru']}"[:64],
+            rows = [[{"text": f"{i + 1}. {r.get('title_ru', r['title'])}"[:64],
                       "callback_data": f"h:{state['rev']}:pick:{i}"}] for i, r in enumerate(state["recipes"])]
             rows.append([{"text": "Мои продукты", "callback_data": f"h:{state['rev']}:list"}])
             result = await self.say(job, f"Подходящие блюда: {len(state['recipes'])}. Что приготовим?",
@@ -400,7 +400,7 @@ class Bot:
                     "Докупить: " + ", ".join(r["missing"]) + "\n" if r["missing"] else ""))
                 caption += f'<a href="{html.escape(r["url"], quote=True)}">Источник</a>'
                 pictures.append((Path(r["picture"]), caption))
-                rows.append([{"text": f"{i + 1}. {r['title_ru']}"[:64], "callback_data": f"h:{rev}:pick:{i}"}])
+                rows.append([{"text": f"{i + 1}. {r.get('title_ru', r['title'])}"[:64], "callback_data": f"h:{rev}:pick:{i}"}])
             await self.effect(job, "album", lambda: self.telegram.album(job["owner"], pictures))
             text = f"Подходящие блюда: {len(found)}. Что приготовим?"
         else:

@@ -173,12 +173,16 @@ def test_recipe_click_burst_calls_luna_and_sends_recipe_once(tmp_path):
         assert text.startswith('<b>Яйца</b>\n<a href="https://www.budgetbytes.com/test/">Источник</a>')
         assert '<b>Ингредиенты:</b>' in text and '<b>Как приготовить:</b>' in text
         assert '<i>Сверь количество продуктов перед готовкой.</i>' in text
+        saved = store.session(1)
+        del saved['recipes'][0]['title_ru']
+        with store.db:
+            store.save(1, saved)
         store.ingest(12, 1, {'kind': 'callback', 'data': f"h:{state['rev']}:choices"})
         choices_job = store.claim()
         await bot.handle(choices_job)
         store.finish(choices_job)
         assert telegram.sent[-1][0] == 'sendMessage'
-        assert telegram.sent[-1][1]['reply_markup']['inline_keyboard'][0][0]['text'] == '1. Яйца'
+        assert telegram.sent[-1][1]['reply_markup']['inline_keyboard'][0][0]['text'] == '1. Eggs'
         assert model.calls == 1
         store.ingest(13, 1, payload)
         repeat_job = store.claim()
@@ -186,7 +190,7 @@ def test_recipe_click_burst_calls_luna_and_sends_recipe_once(tmp_path):
         store.finish(repeat_job)
         assert model.calls == 1
         assert telegram.sent[-1][0] == 'editMessageText'
-        assert telegram.sent[-1][1]['text'] == text
+        assert telegram.sent[-1][1]['text'] == text.replace('<b>Яйца</b>', '<b>Eggs</b>')
         assert '1. Вари 5 минут.\n\n2. Подавай.' in text
         assert '• 2 яйца' in text and state['recipes'][0]['url'] in text
         assert store.db.execute('SELECT used FROM quota WHERE owner=1').fetchone()[0] == 1
