@@ -186,6 +186,27 @@ def test_search_discards_sources_outside_the_catalog(tmp_path):
     assert web.visited == ['https://www.budgetbytes.com/eggs/']
 
 
+def test_russian_recipe_text_does_not_exhaust_candidate_budget_prematurely(tmp_path):
+    received = []
+    class Model:
+        async def ask(self, instructions, schema, payload, **kwargs):
+            if kwargs.get('search'):
+                return {'urls': [f'https://eda.rambler.ru/recepty/recipe-{i}' for i in range(3)]}
+            received.extend(payload['recipes'])
+            return {'matches': []}
+
+    class Web:
+        async def get(self, url, **kwargs):
+            data = {'@type': 'Recipe', 'name': url.rsplit('/', 1)[-1], 'image': '/dish.jpg',
+                    'recipeIngredient': ['2 яйца'],
+                    'recipeInstructions': ['Текст русского шага. ' * 80] * 5}
+            return ('<script type="application/ld+json">' + json.dumps(data) + '</script>').encode(), url
+
+    search = RecipeSearch(Model(), Web())
+    asyncio.run(search._batch([{'name': 'яйца'}], '', tmp_path, False, [], 0, 5))
+    assert len(received) == 3
+
+
 def test_recipe_translation_cannot_change_cooking_numbers():
     class Model:
         async def ask(self, *args, **kwargs):

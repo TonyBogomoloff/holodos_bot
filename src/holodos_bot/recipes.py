@@ -365,12 +365,16 @@ class RecipeSearch:
         urls = list(dict.fromkeys(url for url in found["urls"] if recipe_source(url) and url not in excluded))
         fetched = await asyncio.gather(*(fetch(url) for url in urls))
         candidates = []
+        payload_size = 0
         for recipe in fetched:
-            if recipe and sum(len(json.dumps(x)) for x in candidates) < 70000 and not any(
+            if recipe and payload_size < 70000 and not any(
                                   x["url"] == recipe["url"] or x["title"].casefold() == recipe["title"].casefold()
                                   for x in candidates):
                 candidates.append(recipe)
-        logging.info("recipe_sources fetched=%s structured=%s", len(urls), len(candidates))
+                # Luna sends unescaped Unicode; counting \uXXXX would penalize Russian sources.
+                payload_size += len(json.dumps(recipe, ensure_ascii=False))
+        logging.info("recipe_sources fetched=%s parsed=%s candidates=%s",
+                     len(urls), sum(r is not None for r in fetched), len(candidates))
         if not candidates:
             return [], urls
         matches = await self.luna.ask(MATCH_PROMPT, MATCH_SCHEMA,
