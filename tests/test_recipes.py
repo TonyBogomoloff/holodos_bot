@@ -13,6 +13,7 @@ from holodos_bot.recipes import (
     RecipeSearch,
     extract_recipe,
     recipe_numbers,
+    recipe_source,
     validated_matches,
 )
 
@@ -33,6 +34,54 @@ def test_extracts_actual_source_and_rejects_non_recipes():
     assert r['image_url'] == 'https://example.com/eggs.jpg'
     with pytest.raises(ProviderError, match='recipe_not_structured'):
         extract_recipe('<title>Egg recipes</title><p>Invent anything</p>', 'https://example.com')
+
+
+MENU_SOURCE = """
+<body itemscope itemtype="http://schema.org/WebPage">
+<meta itemprop="name" content="Другой заголовок">
+<section id="pt_info" itemscope itemtype="http://schema.org/Recipe">
+  <meta itemprop="name" content="Яйца в форме">
+  <div itemprop="author" itemscope itemtype="http://schema.org/Person">
+    <meta itemprop="name" content="Автор"><img itemprop="image" src="/avatar.jpg">
+  </div>
+  <picture><source srcset="/large.jpg"><img itemprop="image" src="//static.1000.menu/dish.jpg"></picture>
+  <meta itemprop="recipeYield" content="2"/>
+  <div><meta itemprop="recipeIngredient" content="Яйца - 2 шт." /></div>
+  <div><meta itemprop="recipeIngredient" content="Масло - 0.5 чайн.л." /></div>
+  <section id="pt_steps">
+    <meta itemprop="totalTime" content="PT20M">
+    <ol class="instructions" itemprop="recipeInstructions">
+      <li><h3>Шаг 1</h3><a data-caption="Не дублировать"><img src="/step.jpg"></a>
+        <div class="instruction"><p>Смажьте форму.</p><p>Добавьте <b>2 яйца</b>.</p></div></li>
+      <li class="as-ad-step"><script>advertising()</script><p>Реклама</p></li>
+      <li><h3>Шаг 2</h3><div class="instruction">Готовьте при 180°С<br>15 минут.
+        <script>ignore_me()</script><style>.ad { color: red }</style></div></li>
+    </ol>
+  </section>
+</section>
+<div class="instruction">Комментарий: ещё 100 минут.</div>
+</body>
+"""
+
+
+def test_1000_menu_preserves_microdata_quantities_steps_and_recipe_photo():
+    r = extract_recipe(MENU_SOURCE, 'https://1000.menu/cooking/123-eggs')
+    assert r['title'] == 'Яйца в форме'
+    assert r['ingredients'] == ['Яйца - 2 шт.', 'Масло - 0.5 чайн.л.']
+    assert r['steps'] == ['Смажьте форму. Добавьте 2 яйца.', 'Готовьте при 180°С 15 минут.']
+    assert r['image_url'] == 'https://static.1000.menu/dish.jpg'
+    assert (r['time'], r['yield']) == ('PT20M', '2')
+
+
+@pytest.mark.parametrize('document', [
+    MENU_SOURCE.replace('id="pt_info"', 'id="related"'),
+    MENU_SOURCE.replace('recipeIngredient', 'unrelated'),
+    MENU_SOURCE.replace('recipeInstructions', 'unrelated'),
+    MENU_SOURCE.replace('itemprop="image"', 'itemprop="unrelated"'),
+])
+def test_1000_menu_rejects_incomplete_or_unrelated_recipe_markup(document):
+    with pytest.raises(ProviderError, match='recipe_not_structured'):
+        extract_recipe(document, 'https://1000.menu/cooking/123-eggs')
 
 
 def test_missing_ingredient_cannot_be_silently_dropped():
@@ -87,6 +136,54 @@ def test_redirect_is_revalidated_and_oversized_page_rejected():
         finally:
             await web.close()
     asyncio.run(run())
+
+
+def test_recipe_sources_restrict_hosts_and_redirects_but_allow_image_cdn():
+    for url in ['https://eda.ru.evil.test/recipe', 'https://evil.test/?source=eda.ru',
+                'https://eda.ru@evil.test/recipe', 'https://sub.budgetbytes.com/recipe',
+                'file:///eda.ru/recipe']:
+        assert recipe_source(url) is None
+
+    async def run():
+        visited = []
+        async def handler(request):
+            visited.append(str(request.url))
+            if request.url.host == 'eda.ru':
+                return httpx.Response(301, headers={'Location': 'https://eda.rambler.ru/recepty/eggs'})
+            if request.url.path == '/escape':
+                return httpx.Response(302, headers={'Location': 'https://other.test/eggs'})
+            return httpx.Response(200, headers={'content-type': 'image/jpeg' if
+                request.url.host == 'cdn.test' else 'text/html'}, content=b'public content')
+        web = PublicWeb(httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        try:
+            _, final = await web.get('https://eda.ru/recepty/eggs', recipe_page=True)
+            assert final == 'https://eda.rambler.ru/recepty/eggs'
+            with pytest.raises(ProviderError, match='recipe_source_not_allowed'):
+                await web.get('https://www.budgetbytes.com/escape', recipe_page=True)
+            assert not any('other.test' in url for url in visited)
+            assert await web.get('https://cdn.test/photo.jpg', image=True)
+        finally:
+            await web.close()
+    asyncio.run(run())
+
+
+def test_search_discards_sources_outside_the_catalog(tmp_path):
+    class Model:
+        async def ask(self, instructions, schema, payload, **kwargs):
+            assert kwargs['search'] is True
+            assert 'budgetbytes.com' in payload['allowed_domains']
+            return {'urls': ['https://other.test/recipe', 'https://www.budgetbytes.com/eggs/']}
+
+    class Web:
+        visited = []
+        async def get(self, url, **kwargs):
+            self.visited.append(url)
+            assert kwargs['recipe_page'] is True
+            raise ProviderError('source_unavailable')
+
+    web = Web()
+    asyncio.run(RecipeSearch(Model(), web).search([], '', tmp_path))
+    assert web.visited == ['https://www.budgetbytes.com/eggs/']
 
 
 def test_recipe_translation_cannot_change_cooking_numbers():

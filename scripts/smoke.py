@@ -9,13 +9,21 @@ from pathlib import Path
 from PIL import Image, ImageDraw
 
 from holodos_bot.config import Config
-from holodos_bot.providers import Groq, Luna
+from holodos_bot.providers import Groq, Luna, prepare_image
 from holodos_bot.recipes import (
     INVENTORY_PROMPT,
     INVENTORY_SCHEMA,
     PublicWeb,
     RecipeSearch,
+    extract_recipe,
+    recipe_source,
 )
+
+SOURCE_SAMPLES = {
+    'eda.rambler.ru': 'https://eda.rambler.ru/recepty/zavtraki/sirniki-iz-tvoroga-18506',
+    'budgetbytes.com': 'https://www.budgetbytes.com/creamy-tomato-spinach-pasta/',
+    '1000.menu': 'https://1000.menu/cooking/5227-prostaya-sharlotka',
+}
 
 
 async def run(args):
@@ -25,6 +33,19 @@ async def run(args):
     try:
         with tempfile.TemporaryDirectory(prefix="holodos-smoke-") as tmp:
             directory = Path(tmp)
+            if args.stage in {'sources', 'all'}:
+                report['sources'] = []
+                for domain, url in SOURCE_SAMPLES.items():
+                    data, final_url = await web.get(url, recipe_page=True)
+                    assert recipe_source(final_url) == domain, 'source_changed_domain'
+                    recipe = extract_recipe(data.decode('utf-8', errors='replace'), final_url)
+                    data, _ = await web.get(recipe['image_url'], limit=8_000_000, image=True)
+                    original, picture = directory / 'source-image', directory / 'verified.jpg'
+                    original.write_bytes(data)
+                    prepare_image(original, picture, 1200)
+                    report['sources'].append({'domain': domain, 'url': final_url,
+                        'ingredients': len(recipe['ingredients']), 'steps': len(recipe['steps']),
+                        'photo_bytes': picture.stat().st_size})
             if args.stage in {"vision", "all"}:
                 images = []
                 for i, labels in enumerate([['EGGS', 'TOMATOES', 'MILK'], ['EGGS', 'CHEESE']]):
@@ -65,6 +86,7 @@ async def run(args):
                 search = RecipeSearch(luna, web)
                 found = await search.search(inventory, '', directory)
                 assert found, 'no_verified_recipes'
+                assert all(recipe_source(r['url']) for r in found), 'unexpected_recipe_source'
                 rendered = await search.render(found[0])
                 report['recipes'] = [{"title": r['title_ru'], 'url': r['url'],
                                       'photo_bytes': Path(r['picture']).stat().st_size,
@@ -83,5 +105,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--secrets', type=Path, default=Path('/home/tony/Desktop/_code/config.json'))
-    parser.add_argument('--stage', choices=['vision', 'asr', 'search', 'all'], default='all')
+    parser.add_argument('--stage', choices=['vision', 'asr', 'sources', 'search', 'all'], default='all')
     asyncio.run(run(parser.parse_args()))
