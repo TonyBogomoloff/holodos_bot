@@ -24,17 +24,42 @@ def test_cannot_act_from_another_users_callback_or_group():
     assert normalize_update({'message': {'from': {'id': 1}, 'chat': {'id': 1, 'type': 'group'}}}) == (None, None)
 
 
-def test_album_and_duplicate_photo_keep_one_inventory_panel(tmp_path):
+def test_photos_auto_merge_below_messages_and_retry_once(tmp_path):
     async def run():
+        from PIL import Image
         store, telegram = Store(tmp_path / 'db.sqlite'), Telegram()
-        bot = Bot(Config('dummy:token', 'key', tmp_path), store, telegram, None, None, None)
-        for identity, unique in enumerate(['a', 'b', 'a'], 1):
+        async def download(file_id, target):
+            Image.new('RGB', (64, 64)).save(target, format='PNG')
+        telegram.download = download
+        class Model:
+            calls = 0
+            async def ask(self, prompt, schema, data, **kwargs):
+                self.calls += 1
+                assert len(data['inventory']) == self.calls - 1
+                assert len(kwargs['images']) == 1
+                return {'inventory': data['inventory'] + [
+                    {'name': str(self.calls), 'quantity': '', 'uncertain': False}],
+                    'preferences': '', 'reply': 'Добавил.'}
+        model = Model()
+        bot = Bot(Config('dummy:token', 'key', tmp_path), store, telegram, None, model, None)
+        state = store.session(1)
+        state['panel'] = 999
+        with store.db:
+            store.save(1, state)
+        for identity, unique in enumerate(['a', 'b', 'c', 'a'], 1):
             store.ingest(identity, 1, {'kind': 'photo', 'file_id': unique, 'unique': unique, 'caption': ''})
             job = store.claim()
             await bot.handle(job)
+            revision = store.session(1)['rev']
+            await bot.handle(job)
+            assert store.session(1)['rev'] == revision
             store.finish(job)
-        assert len(store.session(1)['photos']) == 2
-        assert [x[0] for x in telegram.sent] == ['sendMessage', 'editMessageText', 'editMessageText']
+        assert model.calls == 3
+        assert len(store.session(1)['inventory']) == 3
+        assert store.session(1)['photos'] == []
+        assert sum(method == 'sendMessage' for method, _ in telegram.sent) == 4
+        assert all(payload.get('message_id') != 999 for _, payload in telegram.sent)
+        assert 'Готово, распознать' not in str(telegram.sent)
     asyncio.run(run())
 
 
@@ -95,6 +120,12 @@ def test_voice_correction_applies_once_after_delivery_failure(tmp_path):
         assert model.calls == 1
         assert store.session(1)['rev'] == revision
         assert store.session(1)['previous'][0][0]['name'] == 'молоко'
+        sends = [payload for method, payload in telegram.sent if method == 'sendMessage']
+        assert len(sends) == 2
+        assert sends[0]['text'] == 'Слушаю голосовое… 🎙'
+        assert 'Твои продукты:' in sends[1]['text']
+        assert any(method == 'editMessageText' and payload['text'] ==
+                   'Ты сказал:\nУбери молоко, добавь рис' for method, payload in telegram.sent)
     asyncio.run(run())
 
 

@@ -36,6 +36,55 @@ async def run(args):
     try:
         with tempfile.TemporaryDirectory(prefix="holodos-smoke-") as tmp:
             directory = Path(tmp)
+            if args.stage == 'intake':
+                # Real vision/ASR/LLM, temporary state and simulated Telegram delivery.
+                store = Store(directory / 'intake.sqlite')
+                class Telegram:
+                    messages = []
+                    async def call(self, method, **payload):
+                        self.messages.append((method, payload))
+                        return {'message_id': len(self.messages)}
+                    async def download(self, file_id, target, *args):
+                        target.write_bytes(Path(file_id).read_bytes())
+                telegram = Telegram()
+                bot = Bot(replace(config, data_dir=directory), store, telegram, groq, luna, web)
+                try:
+                    for i, label in enumerate(['EGGS', 'TOMATOES'], 1):
+                        path = directory / f'food-{i}.jpg'
+                        picture = Image.new('RGB', (600, 400), '#ddd7cc')
+                        ImageDraw.Draw(picture).text((60, 160), label, fill='#222222', font_size=50)
+                        picture.save(path)
+                        store.ingest(i, 1, {'kind': 'photo', 'file_id': str(path),
+                                            'unique': str(i), 'caption': 'Тестовая карточка продукта'})
+                        job = store.claim()
+                        await bot.handle(job)
+                        store.finish(job)
+                    inventory = store.session(1)['inventory']
+                    assert any('яй' in x['name'].lower() for x in inventory), 'lost_eggs'
+                    assert any('помидор' in x['name'].lower() or 'томат' in x['name'].lower()
+                               for x in inventory), 'missing_tomatoes'
+                    audio = directory / 'intake.wav'
+                    process = await asyncio.create_subprocess_exec(
+                        'ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                        'flite=text=Add rice.:voice=slt', str(audio),
+                        stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                    assert await process.wait() == 0
+                    store.ingest(3, 1, {'kind': 'voice', 'file_id': str(audio), 'duration': 3})
+                    job = store.claim()
+                    await bot.handle(job)
+                    store.finish(job)
+                    assert 'rice' in job['cache']['transcript'].lower(), 'missing_transcript'
+                    assert any('рис' in x['name'].lower()
+                               for x in store.session(1)['inventory']), 'missing_rice'
+                    sends = [p for method, p in telegram.messages if method == 'sendMessage']
+                    assert len(sends) == 4, 'unexpected_delivery_order'
+                    assert sends[2]['text'] == 'Слушаю голосовое… 🎙'
+                    assert 'Твои продукты:' in sends[3]['text']
+                    report['intake'] = {'auto_photos': 2, 'merged': True,
+                                        'voice_transcript_before_result': True,
+                                        'telegram_delivery': 'simulated'}
+                finally:
+                    store.close()
             if args.stage == 'recipe':
                 data, url = await web.get(SOURCE_SAMPLES['budgetbytes.com'], recipe_page=True)
                 recipe = extract_recipe(data.decode('utf-8', errors='replace'), url)
@@ -147,5 +196,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--secrets', type=Path, default=Path('/home/tony/Desktop/_code/config.json'))
-    parser.add_argument('--stage', choices=['vision', 'asr', 'sources', 'search', 'recipe', 'all'], default='all')
+    parser.add_argument('--stage', choices=['vision', 'asr', 'sources', 'search', 'recipe', 'intake', 'all'], default='all')
     asyncio.run(run(parser.parse_args()))

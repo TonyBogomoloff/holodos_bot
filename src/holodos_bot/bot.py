@@ -49,7 +49,7 @@ def keyboard(state):
     def button(text, action):
         return {"text": text, "callback_data": f"h:{rev}:{action}"}
     if state["photos"]:
-        rows.append([button("Готово, распознать", "recognize")])
+        rows.append([button("Повторить распознавание", "recognize")])
     elif state["inventory"]:
         rows.append([button("🍳 Подобрать блюда", "search")])
     if state.get("previous") is not None:
@@ -70,7 +70,7 @@ def inventory_text(state, notice=""):
             parts.append("\nПункты с ❓ лучше уточнить — напиши или скажи голосом.")
         parts.append("\nЧто-то поправить? Напиши или отправь голосовое.")
     if state["photos"]:
-        parts.append(f"\nФото: {len(state['photos'])}. Можешь добавить ещё или нажать «Готово, распознать».")
+        parts.append(f"\nФото: {len(state['photos'])}. Ожидают распознавания.")
     if state.get("preferences"):
         parts.append("\nУчту: " + state["preferences"][:220])
     return "\n".join(parts) or WELCOME
@@ -204,18 +204,7 @@ class Bot:
                         if not await self.limit(job):
                             return
                         await self.panel(job, state, "Рассматриваю фотографии… 👀", {"inline_keyboard": []})
-                        images = []
-                        for i, photo in enumerate(state["photos"]):
-                            source, target = directory / f"input-{i}", directory / f"photo-{i}.jpg"
-                            await self.telegram.download(photo["file_id"], source)
-                            await asyncio.to_thread(prepare_image, source, target)
-                            images.append(target)
-                        result = await self.cached(job, "inventory", lambda: self.luna.ask(
-                            INVENTORY_PROMPT, INVENTORY_SCHEMA,
-                            {"inventory": state["inventory"], "preferences": state["preferences"],
-                             "captions": [x["caption"] for x in state["photos"]]}, images=images))
-                        self.update_inventory(state, result)
-                        state["photos"] = []
+                        result = await self.recognize(job, state, directory)
                         self.apply(job, state, notice=result["reply"])
                     else:
                         self.apply(job, state)
@@ -233,13 +222,26 @@ class Bot:
                 else:
                     self.apply(job, state)
             elif p["kind"] == "photo":
-                if len(state["photos"]) >= 10:
-                    self.apply(job, state, notice="Уже есть 10 фото. Давай сначала разберём их.")
+                # Each photo gets a new panel below the incoming message. Keep its ID
+                # in the job so a retry edits the same progress message.
+                result = await self.say(job, "Рассматриваю фото… 👀", "photo_progress",
+                                        {"inline_keyboard": []})
+                state["panel"] = result["message_id"]
+                with self.store.db:
+                    self.store.save(job["owner"], state)
+                if p["unique"] in state.get("recognized_photos", []):
+                    self.apply(job, state, notice="Это фото уже учтено 🙂")
+                elif not await self.limit(job):
+                    await self.panel(job, state, inventory_text(state, "На сегодня лимит обработки закончился."))
+                    return
                 else:
                     if not any(x["unique"] == p["unique"] for x in state["photos"]):
                         state["photos"].append(p)
                         state["rev"] += 1
-                    self.apply(job, state)
+                    with self.store.db:
+                        self.store.save(job["owner"], state)
+                    result = await self.recognize(job, state, directory)
+                    self.apply(job, state, notice=result["reply"])
             else:
                 text = p.get("text", "").strip()
                 command = text.split(maxsplit=1)[0].split("@")[0].lower() if text.startswith("/") else ""
@@ -252,7 +254,7 @@ class Bot:
                     self.apply(job, state)
                 elif command in {"/help", "/privacy"}:
                     await self.say(job, PRIVACY if command == "/privacy" else
-                        "Пришли фото холодильника и нажми «Готово, распознать».\n"
+                        "Пришли фото холодильника — я сам распознаю продукты. Следующие фото дополнят список.\n"
                         "Поправить список можно текстом или голосом: «Убери молоко, добавь рис».\n"
                         "Потом нажми «Подобрать блюда». Можно добавить пожелание: «Без мяса, до 30 минут».\n\n"
                         "/new — новый список\n/products — мои продукты\n/privacy — о данных\n/delete — удалить данные")
@@ -280,11 +282,19 @@ class Bot:
                             return
                         if not await self.limit(job):
                             return
-                        await self.panel(job, state, "Слушаю твою правку… 🎙", {"inline_keyboard": []})
+                        progress = await self.say(job, "Слушаю голосовое… 🎙", "voice_progress",
+                                                  {"inline_keyboard": []})
                         audio = directory / "voice.ogg"
                         if "transcript" not in job["cache"]:
                             await self.telegram.download(p["file_id"], audio, 8_000_000)
                         text = await self.cached(job, "transcript", lambda: self.groq.transcribe(audio))
+                        transcript_parts = list(chunks("Ты сказал:\n" + text))
+                        await self.telegram.call("editMessageText", chat_id=job["owner"],
+                            message_id=progress["message_id"], text=transcript_parts[0],
+                            reply_markup={"inline_keyboard": []})
+                        if len(transcript_parts) > 1:
+                            await self.say(job, "\n".join(transcript_parts[1:]), "transcript_rest")
+                        state["panel"] = None
                     if not text:
                         await self.say(job, "Не разобрал. Попробуй ещё раз или напиши текстом 🙂")
                         await self.panel(job, state)
@@ -296,8 +306,6 @@ class Bot:
                         {"inventory": state["inventory"], "preferences": state["preferences"], "correction": text}))
                     self.update_inventory(state, result)
                     notice = result["reply"]
-                    if p["kind"] == "voice":
-                        notice = f"Услышал: «{text[:220]}»\n{notice}"
                     self.apply(job, state, notice=notice)
         applied = job["cache"]["applied"]
         # State and applied checkpoint are committed together; retries never apply a correction twice.
@@ -313,6 +321,25 @@ class Bot:
             await self.show_recipe(job, state)
         else:
             await self.panel(job, state, inventory_text(state, applied["notice"]))
+
+    async def recognize(self, job, state, directory):
+        if "inventory" not in job["cache"]:
+            images = []
+            for i, photo in enumerate(state["photos"]):
+                source, target = directory / f"input-{i}", directory / f"photo-{i}.jpg"
+                await self.telegram.download(photo["file_id"], source)
+                await asyncio.to_thread(prepare_image, source, target)
+                images.append(target)
+            await self.cached(job, "inventory", lambda: self.luna.ask(
+                INVENTORY_PROMPT, INVENTORY_SCHEMA,
+                {"inventory": state["inventory"], "preferences": state["preferences"],
+                 "captions": [x["caption"] for x in state["photos"]]}, images=images))
+        result = job["cache"]["inventory"]
+        self.update_inventory(state, result)
+        state["recognized_photos"] = (
+            state.get("recognized_photos", []) + [x["unique"] for x in state["photos"]])[-300:]
+        state["photos"] = []
+        return result
 
     @staticmethod
     def update_inventory(state, result):
