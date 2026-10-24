@@ -7,6 +7,8 @@ import shutil
 import time
 from pathlib import Path
 
+from .planning import amount, multiplier, number, quantity
+from .planning_ui import PlanningUI, nutrition_text
 from .providers import ProviderError, prepare_image
 from .recipes import INVENTORY_PROMPT, INVENTORY_SCHEMA, RecipeSearch
 
@@ -14,8 +16,9 @@ log = logging.getLogger(__name__)
 WELCOME = "Привет! Покажи, что у тебя в холодильнике, — подберу, что приготовить\n\n" \
           "Пришли одно или несколько фото. Можно и просто перечислить продукты — текстом или голосом."
 PRIVACY = "Фото и текст обрабатывает OpenAI, голос — Groq. Загруженные файлы удаляются после обработки, " \
-          "список и правки — после суток бездействия. Резервные копии живут до суток. " \
-          "/delete — удалить список и правки сейчас."
+          "список холодильника и правки — после суток бездействия. " \
+          "Профиль питания и последний план с покупками хранятся до /delete. " \
+          "Резервные копии живут до суток. /delete — удалить все сохранённые данные сейчас."
 
 
 def normalize_update(update, allowed=()):
@@ -54,6 +57,7 @@ def keyboard(state):
         rows.append([button("Подобрать блюда", "search")])
     if state["inventory"] or state["photos"]:
         rows.append([button("Новый список", "new")])
+    rows.append([button("План питания", "plan"), button("Главное меню", "home")])
     return {"inline_keyboard": rows}
 
 
@@ -109,6 +113,7 @@ class Bot:
     def __init__(self, config, store, telegram, groq, luna, web):
         self.config, self.store, self.telegram, self.groq, self.luna = config, store, telegram, groq, luna
         self.recipes = RecipeSearch(luna, web)
+        self.planning = PlanningUI(self, luna, web)
         self.stop = asyncio.Event()
         self.busy_notices = {}
         self.work = config.data_dir / "work"
@@ -179,14 +184,21 @@ class Bot:
         if not job["cache"].get("applied"):
             p = job["payload"]
             if p["kind"] == "callback":
-                match = re.fullmatch(r"h:(\d+):(recognize|search|shop|undo|add|new|list|pick|choices)(?::(\d+))?",
+                match = re.fullmatch(r"h:(\d+):(recognize|search|shop|undo|add|new|list|pick|choices|"
+                                     r"home|plan|profile|saveprofile|build|shopping|day|meal)(?::(\d+))?",
                                      p["data"])
                 if not match or int(match[1]) != state["rev"]:
                     await self.say(job, "Этот список уже изменился. Вот актуальный", "stale")
-                    await self.panel(job, state)
+                    if state.get('mode') in {'home', 'plan'}:
+                        await self.planning.show(job, state, 'home' if state['mode'] == 'home' else 'planning')
+                    else:
+                        await self.panel(job, state)
                     return
                 action = match[2]
-                if action == "pick":
+                if await self.planning.callback(job, state, action, match[3], directory):
+                    if not job['cache'].get('applied'):
+                        return
+                elif action == "pick":
                     index = int(match[3] or -1)
                     if not 0 <= index < len(state["recipes"]):
                         return
@@ -243,8 +255,10 @@ class Bot:
                 elif action == "add":
                     self.apply(job, state, notice="Пришли ещё фото сюда — можно несколько сразу.")
                 else:
+                    state['mode'] = 'inventory'
                     self.apply(job, state)
             elif p["kind"] == "photo":
+                state['mode'] = 'inventory'
                 # Each photo gets a new panel below the incoming message. Keep its ID
                 # in the job so a retry edits the same progress message.
                 result = await self.say(job, "Рассматриваю фото…", "photo_progress",
@@ -269,9 +283,12 @@ class Bot:
                 text = p.get("text", "").strip()
                 command = text.split(maxsplit=1)[0].split("@")[0].lower() if text.startswith("/") else ""
                 if command in {"/start", "/products", "/cancel"}:
-                    if command == "/start":
-                        state["panel"] = None
-                    self.apply(job, state)
+                    state['panel'], state['profile_draft'] = None, None
+                    state['mode'] = 'inventory' if command == '/products' else 'home'
+                    state['rev'] += 1
+                    self.apply(job, state, 'inventory' if command == '/products' else 'home')
+                elif command in {'/plan', '/profile'}:
+                    self.planning.enter(job, state, edit=command == '/profile')
                 elif command == "/new":
                     state = self.reset(state)
                     self.apply(job, state)
@@ -280,11 +297,16 @@ class Bot:
                         "Пришли фото холодильника — я сам распознаю продукты. Следующие фото дополнят список.\n"
                         "Поправить список можно текстом или голосом: «Убери молоко, добавь рис».\n"
                         "Потом нажми «Подобрать блюда». Можно добавить пожелание: «Без мяса, до 30 минут».\n\n"
-                        "/new — новый список\n/products — мои продукты\n/privacy — о данных\n/delete — удалить данные")
+                        "В «Плане питания» укажи бюджет, людей, приёмы пищи, вкусы и ограничения. "
+                        "Составлю меню на день, неделю или две, сначала покажу покупки.\n"
+                        "КБЖУ и стоимость ориентировочные.\n\n"
+                        "/plan — план питания\n/profile — профиль\n/new — новый список\n"
+                        "/products — мои продукты\n/privacy — о данных\n/delete — удалить данные")
                     return
                 elif command == "/delete":
                     with self.store.db:
                         self.store.db.execute("DELETE FROM sessions WHERE owner=?", (job["owner"],))
+                        self.store.db.execute("DELETE FROM planning WHERE owner=?", (job["owner"],))
                         ids = [r[0] for r in self.store.db.execute(
                             "SELECT id FROM jobs WHERE owner=? AND id!=?", (job["owner"], job["id"]))]
                         for identity in ids:
@@ -293,7 +315,7 @@ class Bot:
                     for identity in ids:
                         shutil.rmtree(self.work / str(identity), ignore_errors=True)
                     self.store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                    await self.say(job, "Удалил список и сохранённые правки. Можно начать заново")
+                    await self.say(job, "Удалил продукты, правки, профиль и план питания. Можно начать заново")
                     return
                 elif command:
                     await self.say(job, "Пришли фото или список продуктов. /help — короткая подсказка.")
@@ -325,16 +347,19 @@ class Bot:
                         return
                     if not await self.limit(job):
                         return
-                    result = await self.cached(job, "inventory", lambda: self.luna.ask(
-                        INVENTORY_PROMPT, INVENTORY_SCHEMA,
-                        {"inventory": state["inventory"], "preferences": state["preferences"], "correction": text}))
-                    self.update_inventory(state, result)
-                    state["panel"] = None
-                    self.apply(job, state, changes=True)
+                    if not await self.planning.text(job, state, text):
+                        result = await self.cached(job, "inventory", lambda: self.luna.ask(
+                            INVENTORY_PROMPT, INVENTORY_SCHEMA,
+                            {"inventory": state["inventory"], "preferences": state["preferences"], "correction": text}))
+                        self.update_inventory(state, result)
+                        state["panel"], state['mode'] = None, 'inventory'
+                        self.apply(job, state, changes=True)
         applied = job["cache"]["applied"]
         # State and applied checkpoint are committed together; retries never apply a correction twice.
         state = self.store.session(job["owner"])
-        if applied["view"] == "results":
+        if applied['view'] in {'home', 'planning', 'shopping', 'plan_day'}:
+            await self.planning.show(job, state, applied['view'])
+        elif applied["view"] == "results":
             await self.show_results(job, state)
         elif applied["view"] == "choices":
             rows = [[{"text": f"{i + 1}. {r.get('title_ru', r['title'])}"[:64],
@@ -385,7 +410,8 @@ class Bot:
     @staticmethod
     def reset(state):
         return {"rev": state["rev"] + 1, "inventory": [], "previous": None, "photos": [], "recipes": [],
-                "panel": state["panel"], "preferences": "", "searched": False}
+                "panel": state["panel"], "preferences": "", "searched": False, 'mode': 'inventory',
+                'profile': state.get('profile'), 'meal_plan': state.get('meal_plan')}
 
     async def show_results(self, job, state):
         if "progress_panel" not in job["cache"]:
@@ -422,6 +448,8 @@ class Bot:
 
     async def show_recipe(self, job, state):
         r = job["cache"]["selected"]
+        if r.get('plan_people'):
+            await self.planning.photo(job, r)
         # Luna supplies validated content; the bot applies consistent Telegram formatting.
         # Escape source/model text before adding our own tags.
         def lines(value):
@@ -431,9 +459,17 @@ class Bot:
                  f'<a href="{html.escape(r["url"], quote=True)}">Источник</a>', ""]
         if r.get("translation_status") == "source":
             parts.extend(["<i>Оригинальный рецепт</i>", ""])
+        if r.get('nutrition_estimate'):
+            parts.extend(['<b>На одну порцию:</b> ' + nutrition_text(r['nutrition_estimate']), ''])
+        if r.get('plan_people'):
+            factor = r['plan_people'] / r['servings']
+            parts.extend([f"В плане: {r['plan_people']} чел. Исходный рецепт: {number(r['servings'])} порц.",
+                          f"Количество продуктов для плана: × {multiplier(factor)}. Шаги — из источника.", ''])
         parts.append("<b>Ингредиенты:</b>")
         for ingredient in r["ingredients"]:
             parts.extend(lines("• " + ingredient))
+            if r.get('plan_people') and (q := quantity(ingredient)):
+                parts.extend(lines(f"  Для плана: {amount(q['amount'] * factor, q['unit'])}"))
         parts.extend(["", "<b>Как приготовить:</b>"])
         for i, step in enumerate(r["steps"], 1):
             parts.extend(lines(f"{i}. {step.strip()}"))
@@ -454,6 +490,10 @@ class Bot:
         parts.extend(["", "<i>Сверь количество продуктов перед готовкой.</i>"])
         markup = {"inline_keyboard": [[{"text": "Другие блюда", "callback_data": f"h:{state['rev']}:choices"},
                                         {"text": "Мои продукты", "callback_data": f"h:{state['rev']}:list"}]]}
+        if r.get('plan_people'):
+            markup = {'inline_keyboard': [[
+                {'text': 'К меню', 'callback_data': f"h:{state['rev']}:day:{state.get('plan_day', 0)}"},
+                {'text': 'Покупки', 'callback_data': f"h:{state['rev']}:shopping"}]]}
         # Pack complete escaped lines so tags and HTML entities never cross messages.
         pieces, piece = [], ""
         for line in parts:
@@ -528,9 +568,13 @@ class Bot:
                     retry = e.retry_after
                 else:
                     try:
-                        await self.say(job, "Не получилось закончить. Твой список сохранён — попробуй ещё раз",
+                        await self.say(job, "Не получилось закончить. Твои данные сохранены — попробуй ещё раз",
                                        "failure")
-                        await self.panel(job, self.store.session(job["owner"]))
+                        state = self.store.session(job['owner'])
+                        if state.get('mode') == 'plan':
+                            await self.planning.show(job, state, 'planning')
+                        else:
+                            await self.panel(job, state)
                     except ProviderError:
                         pass
             finally:

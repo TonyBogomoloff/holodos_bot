@@ -22,6 +22,8 @@ class Store:
             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(
               owner INTEGER PRIMARY KEY, state TEXT NOT NULL, updated REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS planning(
+              owner INTEGER PRIMARY KEY, state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS jobs(
               id INTEGER PRIMARY KEY AUTOINCREMENT, update_id INTEGER UNIQUE NOT NULL,
               owner INTEGER NOT NULL, payload TEXT NOT NULL, cache TEXT NOT NULL DEFAULT '{}',
@@ -45,14 +47,28 @@ class Store:
 
     def session(self, owner):
         row = self.db.execute("SELECT state FROM sessions WHERE owner=?", (owner,)).fetchone()
-        return json.loads(row[0]) if row else {
+        state = {
             "rev": secrets.randbits(40), "inventory": [], "previous": None, "photos": [], "recipes": [],
-            "panel": None, "preferences": "", "searched": False,
+            "panel": None, "preferences": "", "searched": False, "mode": "inventory", "profile_draft": None,
+            "profile": None, "meal_plan": None, "plan_day": 0,
         }
+        if row:
+            state.update(json.loads(row[0]))
+        planning = self.db.execute("SELECT state FROM planning WHERE owner=?", (owner,)).fetchone()
+        if planning:
+            state.update(json.loads(planning[0]))
+        return state
 
     def save(self, owner, state):
+        planning = {key: state.get(key) for key in ("profile", "meal_plan")}
+        if any(planning.values()):
+            self.db.execute("INSERT INTO planning VALUES(?,?) ON CONFLICT(owner) DO UPDATE "
+                            "SET state=excluded.state", (owner, encoded(planning)))
+        else:
+            self.db.execute("DELETE FROM planning WHERE owner=?", (owner,))
+        ephemeral = {key: value for key, value in state.items() if key not in planning}
         self.db.execute("INSERT INTO sessions VALUES(?,?,?) ON CONFLICT(owner) DO UPDATE "
-                        "SET state=excluded.state,updated=excluded.updated", (owner, encoded(state), time.time()))
+                        "SET state=excluded.state,updated=excluded.updated", (owner, encoded(ephemeral), time.time()))
 
     def offset(self):
         row = self.db.execute("SELECT value FROM meta WHERE key='offset'").fetchone()
@@ -66,7 +82,7 @@ class Store:
                 # durable job is queued, running, or waiting for a retry.
                 duplicate_pick = (
                     payload.get('kind') == 'callback'
-                    and re.fullmatch(r'h:\d+:pick:\d+', payload.get('data', ''))
+                    and re.fullmatch(r'h:\d+:(?:pick|meal|build):\d+', payload.get('data', ''))
                     and self.db.execute(
                         "SELECT 1 FROM jobs WHERE owner=? AND status IN ('pending','running') "
                         "AND json_extract(payload,'$.kind')='callback' "

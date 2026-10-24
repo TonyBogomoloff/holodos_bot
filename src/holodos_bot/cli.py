@@ -14,7 +14,8 @@ from .recipes import PublicWeb
 from .store import Store
 
 COMMANDS = [{"command": name, "description": text} for name, text in [
-    ("start", "Начать"), ("products", "Мои продукты"), ("new", "Новый список"),
+    ("start", "Главное меню"), ("plan", "План питания"), ("profile", "Профиль питания"),
+    ("products", "Мои продукты"), ("new", "Новый список продуктов"),
     ("help", "Как пользоваться"), ("privacy", "О твоих данных"), ("delete", "Удалить мои данные")]]
 
 
@@ -22,7 +23,8 @@ async def execute(args):
     config = Config.load(args.config, args.secrets)
     config.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     telegram, groq, web = Telegram(config.token), Groq(config.groq_key), PublicWeb()
-    store = Store(config.data_dir / "holodos.sqlite3")
+    # Authentication/menu checks must not run schema migrations before the deploy backup.
+    store = Store(config.data_dir / "holodos.sqlite3") if args.command in {'run', 'status'} else None
     try:
         if args.command == "status":
             print(json.dumps({"queue": store.stats(), "database": store.db.execute("PRAGMA quick_check").fetchone()[0]}))
@@ -39,10 +41,10 @@ async def execute(args):
         if args.command == "configure":
             await telegram.call("setMyCommands", commands=COMMANDS)
             await telegram.call("setMyDescription", description=
-                "Пришли фото холодильника — помогу разобрать продукты и найти, что приготовить. "
-                "Список можно поправить текстом или голосом. Рецепты — с фото и ссылками на источники.")
+                "Подберу блюда из холодильника или меню на день и неделю по твоему бюджету и предпочтениям. "
+                "Покажу недостающие покупки и примерные КБЖУ. Рецепты — с фото и ссылками на источники.")
             await telegram.call("setMyShortDescription", short_description=
-                "Фото холодильника → продукты → идеи блюд")
+                "Блюда из холодильника · Меню по бюджету · Покупки · Примерные КБЖУ")
             if await telegram.call("getMyCommands") != COMMANDS:
                 raise ProviderError("telegram_menu_not_verified")
         if args.command in {"check", "configure"}:
@@ -65,7 +67,8 @@ async def execute(args):
         await telegram.close()
         await groq.close()
         await web.close()
-        store.close()
+        if store:
+            store.close()
 
 
 def main():

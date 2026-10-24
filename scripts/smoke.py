@@ -11,6 +11,14 @@ from PIL import Image, ImageDraw
 
 from holodos_bot.bot import Bot
 from holodos_bot.config import Config
+from holodos_bot.planning import (
+    AUDIT_PROMPT,
+    AUDIT_SCHEMA,
+    PROFILE_PROMPT,
+    PROFILE_SCHEMA,
+    MealPlanner,
+    profile_question,
+)
 from holodos_bot.providers import Groq, Luna, prepare_image
 from holodos_bot.recipes import (
     INVENTORY_PROMPT,
@@ -36,6 +44,73 @@ async def run(args):
     try:
         with tempfile.TemporaryDirectory(prefix="holodos-smoke-") as tmp:
             directory = Path(tmp)
+            if args.stage == 'planning':
+                # Real profile extraction, web search, downloaded recipes/photos and diet audit.
+                # All inputs are synthetic; only delivery is simulated.
+                profile = await luna.ask(PROFILE_PROMPT, PROFILE_SCHEMA, {'profile': {}, 'message':
+                    'Два человека, три приёма пищи в день, бюджет на всех 140 евро в неделю. '
+                    'Покупки в Испании. Любим простую домашнюю еду, ограничений питания нет.'})
+                assert not profile_question(profile), 'incomplete_profile'
+                assert profile['people'] == 2 and profile['meals'] == 3
+                assert profile['budget'] == 140 and profile['budget_days'] == 7
+                partial = await luna.ask(PROFILE_PROMPT, PROFILE_SCHEMA, {'profile': {}, 'message':
+                    'Нас двое, 3 приёма пищи, бюджет 100 в неделю на всех. Испания, люблю овощи, '
+                    'аллергия на орехи.'})
+                assert partial['currency'] is None, 'guessed_currency'
+                updated = await luna.ask(PROFILE_PROMPT, PROFILE_SCHEMA, {'profile': partial,
+                    'question': profile_question(partial), 'message': 'Евро. И ещё не люблю грибы.'})
+                assert 'орех' in updated['restrictions'].lower(), 'lost_allergy'
+                audit = await luna.ask(AUDIT_PROMPT, AUDIT_SCHEMA, {
+                    'profile': {**profile, 'restrictions': 'аллергия на молоко'},
+                    'recipes': [{'id': 0, 'ingredients': ['200 мл молока', 'рис 100 г'],
+                                 'steps': ['Сварить рис на молоке.']},
+                                {'id': 1, 'ingredients': ['рис 100 г', 'вода 200 мл'],
+                                 'steps': ['Сварить рис на воде.']}]})
+                assert {r['id']: r['safe'] for r in audit['recipes']} == {0: False, 1: True}, 'diet_audit_failed'
+                inventory = [{'name': 'рис', 'quantity': '500 г', 'uncertain': False},
+                             {'name': 'яйца', 'quantity': '', 'uncertain': False}]
+                async def remember(key, operation):
+                    return await operation()
+                async def progress(text):
+                    logging.info('planning_stage %s', text)
+                plan = await MealPlanner(luna, web).generate(
+                    profile, inventory, 7, directory, remember, progress)
+                assert len(plan['schedule']) == 7 and all(len(day) == 3 for day in plan['schedule'])
+                assert plan['estimate'] <= plan['budget']
+                store = Store(directory / 'planning.sqlite')
+                class PlanningTelegram:
+                    messages = []
+                    photos = []
+                    async def call(self, method, **payload):
+                        self.messages.append((method, payload))
+                        return {'message_id': len(self.messages)}
+                    async def album(self, owner, pictures):
+                        self.photos.extend(pictures)
+                        return [{'message_id': 1000}]
+                telegram = PlanningTelegram()
+                bot = Bot(replace(config, data_dir=directory), store, telegram, None, luna, web)
+                try:
+                    state = store.session(1)
+                    state.update(profile=profile, meal_plan=plan, inventory=inventory, mode='plan')
+                    with store.db:
+                        store.save(1, state)
+                    for i, action in enumerate(['shopping', 'day:6', 'meal:0'], 1):
+                        store.ingest(i, 1, {'kind': 'callback', 'data': f"h:{state['rev']}:{action}"})
+                        job = store.claim()
+                        await bot.handle(job)
+                        store.finish(job)
+                    assert telegram.messages[0][1]['text'].startswith('Покупки на 7')
+                    assert 'День 7 из 7' in telegram.messages[1][1]['text']
+                    assert telegram.photos and 'На одну порцию' in telegram.messages[-1][1]['text']
+                    report['planning'] = {'days': 7, 'people': 2, 'meals': 21,
+                        'verified_recipes': len(plan['recipes']), 'shopping_items': len(plan['shopping']),
+                        'shopping_needs_clarification': sum(r['check'] for r in plan['shopping']),
+                        'within_estimated_budget': True, 'profile': 'parsed', 'source_photo': 'delivered_to_stub',
+                        'missing_currency': 'asked', 'allergy_edit': 'preserved', 'diet_conflict': 'rejected',
+                        'recipes': [{'url': r['url'], 'servings': r['servings']} for r in plan['recipes']],
+                        'telegram_delivery': 'simulated'}
+                finally:
+                    store.close()
             if args.stage == 'intake':
                 # Real vision/ASR/LLM, temporary state and simulated Telegram delivery.
                 store = Store(directory / 'intake.sqlite')
@@ -205,5 +280,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--secrets', type=Path, default=Path('/home/tony/Desktop/_code/config.json'))
-    parser.add_argument('--stage', choices=['vision', 'asr', 'sources', 'search', 'recipe', 'intake', 'all'], default='all')
+    parser.add_argument('--stage', choices=['vision', 'asr', 'sources', 'search', 'recipe', 'intake', 'planning', 'all'], default='all')
     asyncio.run(run(parser.parse_args()))

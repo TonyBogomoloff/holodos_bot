@@ -197,10 +197,14 @@ def extract_recipe(document, url):
             portions = portions[0] if portions else ""
         if not isinstance(portions, (str, int, float)):
             portions = ""
+        nutrition = data.get("nutrition", {})
+        nutrition = {key: plain(nutrition[key])[:80] for key in (
+            "calories", "proteinContent", "fatContent", "carbohydrateContent", "servingSize")
+            if isinstance(nutrition, dict) and isinstance(nutrition.get(key), (str, int, float))}
         return {"title": title, "url": url, "image_url": image,
                 "ingredients": [plain(x) for x in ingredients], "steps": instructions,
                 "time": plain(data.get("totalTime") or data.get("cookTime") or "")[:80],
-                "yield": plain(portions)[:80]}
+                "yield": plain(portions)[:80], "nutrition": nutrition}
     raise ProviderError("recipe_not_structured")
 
 

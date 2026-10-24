@@ -1,0 +1,241 @@
+"""Telegram views for the persistent profile and meal planner."""
+import html
+
+from .planning import (
+    PROFILE_PROMPT,
+    PROFILE_SCHEMA,
+    MealPlanner,
+    amount,
+    fingerprint,
+    multiplier,
+    number,
+    profile_question,
+)
+from .providers import ProviderError, prepare_image
+
+INTRO = ("Расскажи о себе текстом или голосом: сколько человек, приёмов пищи в день, бюджет на всех "
+         "с валютой и периодом, город или страна, любимые блюда и ограничения питания.\n\n"
+         "Например: «Нас двое, 3 приёма пищи, 100 EUR в неделю, Испания. Любим овощи и курицу, "
+         "без молока». Если ограничений или предпочтений нет, так и напиши.")
+
+
+def button(state, text, action):
+    return {"text": text, "callback_data": f"h:{state['rev']}:{action}"}
+
+
+def markup(state, rows):
+    return {"inline_keyboard": [[button(state, text, action) for text, action in row] for row in rows]}
+
+
+def profile_text(profile):
+    periods = {1: "день", 7: "неделю", 14: "две недели", 30: "месяц (30 дней)"}
+    return (f"Людей: {profile['people']} · приёмов пищи: {profile['meals']} в день\n"
+            f"Бюджет на всех: {number(profile['budget'])} {profile['currency']} в {periods[profile['budget_days']]}\n"
+            f"Покупки: {profile['region']}\nПредпочтения: {profile['preferences']}\n"
+            f"Ограничения: {profile['restrictions']}")
+
+
+def nutrition_text(n):
+    return f"≈ {round(n['kcal'])} ккал · Б {number(n['protein'])} · Ж {number(n['fat'])} · У {number(n['carbs'])} г"
+
+
+def shopping_text(plan):
+    parts = [f"Покупки на {plan['days']} дн. · {plan['people']} чел.", ""]
+    buy, check = [], []
+    for row in plan['shopping']:
+        if row['check']:
+            if row['unit']:
+                check.append(f"• {row['name']}: нужно ещё до {amount(row['missing'], row['unit'])}; уточни запас")
+            else:
+                sources = "; ".join(f"{s['text']} × {multiplier(s['factor'])}" for s in row['sources'])
+                check.append(f"• {row['name']}: {sources}. Уточни количество по рецепту и запас.")
+        elif row['missing'] > 1e-7:
+            buy.append(f"• {row['name']} — {amount(row['missing'], row['unit'])}")
+    parts.extend(["Докупить:", *(buy or ["По известным количествам докупать не нужно."])])
+    if check:
+        parts.extend(["", "Уточнить перед покупкой:", *check,
+                      "Неизвестные запасы не вычитал. Уточни их в «Мои продукты» и обнови план."])
+    parts.extend(["", f"Оценка покупок: ≈ {number(plan['estimate'])} {plan['currency']}",
+                  f"Бюджет на этот срок: {number(round(plan['budget'], 2))} {plan['currency']}",
+                  "Стоимость примерная, за нужное количество продуктов. Упаковки и цены магазина могут увеличить чек."])
+    return "\n".join(parts)
+
+
+class PlanningUI:
+    def __init__(self, bot, luna, web):
+        self.bot, self.luna, self.web = bot, luna, web
+        self.engine = MealPlanner(luna, web)
+
+    def enter(self, job, state, edit=False):
+        state['mode'], state['panel'] = 'plan', None
+        if edit or (not state.get('profile') and state.get('profile_draft') is None):
+            state['profile_draft'] = dict(state.get('profile') or {})
+        state['rev'] += 1
+        self.bot.apply(job, state, 'planning')
+
+    async def text(self, job, state, text):
+        if state.get('mode') != 'plan':
+            return False
+        draft = state.get('profile_draft')
+        if draft is None:
+            draft = state.get('profile') or {}
+        result = await self.bot.cached(job, 'profile_parse', lambda: self.luna.ask(
+            PROFILE_PROMPT, PROFILE_SCHEMA, {'profile': draft, 'message': text, 'question': profile_question(draft)}))
+        state['profile_draft'], state['panel'] = result, None
+        state['rev'] += 1
+        self.bot.apply(job, state, 'planning')
+        return True
+
+    async def callback(self, job, state, action, argument, directory):
+        bot = self.bot
+        if action in {'plan', 'profile'}:
+            self.enter(job, state, edit=action == 'profile')
+        elif action == 'home':
+            state['mode'], state['profile_draft'] = 'home', None
+            state['rev'] += 1
+            bot.apply(job, state, 'home')
+        elif action == 'saveprofile':
+            draft = state.get('profile_draft')
+            if draft and not profile_question(draft):
+                if draft != state.get('profile'):
+                    state['meal_plan'] = None
+                state['profile'], state['profile_draft'] = draft, None
+                state['rev'] += 1
+            bot.apply(job, state, 'planning')
+        elif action == 'build':
+            profile = state.get('profile')
+            if not profile or state.get('profile_draft') is not None:
+                bot.apply(job, state, 'planning')
+                return True
+            days = int(argument or 0)
+            if days not in range(1, 15):
+                return True
+            if not await bot.limit(job):
+                return True
+            state['mode'] = 'plan'
+            async def progress(text):
+                await bot.panel(job, state, text, {'inline_keyboard': []})
+            async def remember(key, operation):
+                return await bot.cached(job, key, operation)
+            try:
+                plan = await bot.cached(job, 'meal_plan', lambda: self.engine.generate(
+                    profile, state['inventory'], days, directory, remember, progress))
+            except ProviderError as error:
+                if str(error) not in {'plan_incomplete', 'plan_over_budget'}:
+                    raise
+                text = ("Не удалось уложить полный план в этот бюджет. Попробуй изменить бюджет или пожелания."
+                        if str(error) == 'plan_over_budget' else
+                        "Не нашёл проверенные рецепты для всех приёмов пищи с твоими ограничениями. "
+                        "Попробуй ещё раз или уточни профиль.")
+                await bot.say(job, text, 'plan_unavailable')
+                bot.apply(job, state, 'planning')
+                return True
+            state['meal_plan'], state['plan_day'], state['panel'] = plan, 0, None
+            state['rev'] += 1
+            bot.apply(job, state, 'shopping')
+        elif action in {'shopping', 'day', 'meal'}:
+            plan = state.get('meal_plan')
+            if not plan:
+                bot.apply(job, state, 'planning')
+                return True
+            if action == 'shopping':
+                bot.apply(job, state, 'shopping')
+            elif action == 'day':
+                day = int(argument or 0)
+                if 0 <= day < plan['days']:
+                    state['plan_day'] = day
+                    bot.apply(job, state, 'plan_day')
+            else:
+                index = int(argument if argument is not None else -1)
+                if not 0 <= index < len(plan['recipes']):
+                    return True
+                recipe = plan['recipes'][index]
+                if 'rendered' not in recipe and not await bot.limit(job):
+                    return True
+                progress = await bot.say(job, 'Загружаю рецепт…', 'recipe_progress', {'inline_keyboard': []})
+                bot.store.checkpoint(job, 'recipe_panel', progress['message_id'])
+                translated = recipe.get('rendered') or await bot.cached(job, 'translation', lambda: bot.recipes.render(recipe))
+                if translated.get('translation_status') == 'translated':
+                    recipe['rendered'] = translated
+                bot.store.checkpoint(job, 'selected', {**recipe, **translated, 'plan_people': plan['people']})
+                bot.apply(job, state, 'recipe')
+        else:
+            return False
+        return True
+
+    async def show(self, job, state, view):
+        if view == 'home':
+            await self.bot.panel(job, state,
+                'Что приготовим?\n\nМогу подобрать блюда из твоих продуктов или составить меню и список покупок.',
+                markup(state, [[('Из холодильника', 'list')], [('План питания', 'plan')]]))
+            return
+        plan = state.get('meal_plan')
+        if view in {'shopping', 'plan_day'} and plan:
+            fresh = plan['inventory_hash'] == fingerprint(state['inventory'])
+            if view == 'shopping':
+                text = shopping_text(plan) if fresh else (
+                    'Список продуктов изменился. Обнови план, чтобы пересчитать недостающие покупки.')
+                rows = [[('Показать меню', 'day:0')]]
+                if not fresh:
+                    rows.insert(0, [('Обновить план и покупки', f"build:{plan['days']}")])
+                rows.extend([[('Мои продукты', 'list')], [('План питания', 'plan')]])
+            else:
+                day = min(state.get('plan_day', 0), plan['days'] - 1)
+                parts, rows = [f"День {day + 1} из {plan['days']} · на {plan['people']} чел.",
+                               'КБЖУ примерные, на одну порцию каждого блюда.'], []
+                total = dict.fromkeys(['kcal', 'protein', 'fat', 'carbs'], 0)
+                for slot, index in enumerate(plan['schedule'][day]):
+                    recipe = plan['recipes'][index]
+                    parts.extend(['', plan['labels'][slot] + ': ' + recipe['title_ru'],
+                                  nutrition_text(recipe['nutrition_estimate'])])
+                    for key in total:
+                        total[key] += recipe['nutrition_estimate'][key]
+                    rows.append([(f"{plan['labels'][slot]}: {recipe['title_ru']}"[:64], f'meal:{index}')])
+                parts.extend(['', 'За день на человека: ' + nutrition_text(total)])
+                if not fresh:
+                    parts.extend(['', 'Запасы изменились — покупки нужно пересчитать.'])
+                nav = []
+                if day:
+                    nav.append(('← День ' + str(day), f'day:{day - 1}'))
+                if day + 1 < plan['days']:
+                    nav.append(('День ' + str(day + 2) + ' →', f'day:{day + 1}'))
+                if nav:
+                    rows.append(nav)
+                rows.extend([[('Покупки', 'shopping'), ('План питания', 'plan')]])
+                text = '\n'.join(parts)
+        else:
+            draft, profile = state.get('profile_draft'), state.get('profile')
+            if draft is not None or not profile:
+                question = profile_question(draft or {})
+                if not draft:
+                    text = INTRO
+                elif question:
+                    text = question
+                else:
+                    text = 'Всё верно?\n\n' + profile_text(draft) + '\n\nПоправь текстом или сохрани профиль.'
+                rows = [[('Сохранить профиль', 'saveprofile')]] if draft and not question else []
+            else:
+                text = ('Твой план питания\n\n' + profile_text(profile)
+                        + '\n\nНа какой срок составить меню? Сначала покажу покупки, затем блюда.')
+                rows = [[('На день', 'build:1'), ('На неделю', 'build:7')],
+                        [('На две недели', 'build:14')], [('Изменить профиль', 'profile')]]
+                if plan:
+                    rows.insert(0, [('Моё меню', 'day:0'), ('Покупки', 'shopping')])
+            rows.extend([[('Мои продукты', 'list'), ('Главное меню', 'home')]])
+        # Send below the user's last action and pack long shopping lists safely as plain text.
+        result = await self.bot.say(job, text, f'planning:{view}', markup(state, rows))
+        state['panel'] = result['message_id']
+        with self.bot.store.db:
+            self.bot.store.save(job['owner'], state)
+
+    async def photo(self, job, recipe):
+        async def send():
+            directory = self.bot.work / str(job['id'])
+            original, target = directory / 'selected-source', directory / 'selected.jpg'
+            data, _ = await self.web.get(recipe['image_url'], limit=8_000_000, image=True)
+            original.write_bytes(data)
+            prepare_image(original, target, 1200)
+            caption = html.escape(recipe['title_ru']) + '\n' + (
+                f'<a href="{html.escape(recipe["url"], quote=True)}">Источник</a>')
+            return await self.bot.telegram.album(job['owner'], [(target, caption)])
+        await self.bot.effect(job, 'plan_recipe_photo', send)
