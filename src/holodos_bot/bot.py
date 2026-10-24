@@ -185,9 +185,9 @@ class Bot:
             p = job["payload"]
             if p["kind"] == "callback":
                 match = re.fullmatch(r"h:(\d+):(recognize|search|shop|undo|add|new|list|pick|choices|"
-                                     r"home|plan|profile|saveprofile|build|shopping|day|meal)(?::(\d+))?",
+                                     r"home|plan|profile|saveprofile|build|shopping|day|meal|slot|alternatives|replace)(?::(\d+))?(?::(\d+))?",
                                      p["data"])
-                if not match or int(match[1]) != state["rev"]:
+                if not match or (match[4] is not None and match[2] != "replace") or int(match[1]) != state["rev"]:
                     await self.say(job, "Этот список уже изменился. Вот актуальный", "stale")
                     if state.get('mode') in {'home', 'plan'}:
                         await self.planning.show(job, state, 'home' if state['mode'] == 'home' else 'planning')
@@ -195,7 +195,7 @@ class Bot:
                         await self.panel(job, state)
                     return
                 action = match[2]
-                if await self.planning.callback(job, state, action, match[3], directory):
+                if await self.planning.callback(job, state, action, match[3], directory, match[4]):
                     if not job['cache'].get('applied'):
                         return
                 elif action == "pick":
@@ -298,7 +298,7 @@ class Bot:
                         "Поправить список можно текстом или голосом: «Убери молоко, добавь рис».\n"
                         "Потом нажми «Подобрать блюда». Можно добавить пожелание: «Без мяса, до 30 минут».\n\n"
                         "В «Плане питания» укажи бюджет, людей, приёмы пищи, вкусы и ограничения. "
-                        "Составлю меню на день, неделю или две, сначала покажу покупки.\n"
+                        "Сначала покажу меню на день, неделю или две. Блюда можно заменить, затем открыть покупки.\n"
                         "КБЖУ и стоимость ориентировочные.\n\n"
                         "/plan — план питания\n/profile — профиль\n/new — новый список\n"
                         "/products — мои продукты\n/privacy — о данных\n/delete — удалить данные")
@@ -357,7 +357,7 @@ class Bot:
         applied = job["cache"]["applied"]
         # State and applied checkpoint are committed together; retries never apply a correction twice.
         state = self.store.session(job["owner"])
-        if applied['view'] in {'home', 'planning', 'shopping', 'plan_day'}:
+        if applied['view'] in {'home', 'planning', 'shopping', 'plan_day', 'plan_slot', 'plan_alternatives'}:
             await self.planning.show(job, state, applied['view'])
         elif applied["view"] == "results":
             await self.show_results(job, state)

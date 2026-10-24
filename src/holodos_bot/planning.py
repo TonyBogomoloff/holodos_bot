@@ -1,5 +1,6 @@
 """Source-backed meal plans. Quantities, scaling and stock allocation stay in Python."""
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -131,7 +132,8 @@ def servings(text):
 
 PLAN_SEARCH_PROMPT = """Найди реальные рецепты для меню по профилю питания. ОБЯЗАТЕЛЕН web_search в этом вызове.
 Ищи только allowed_domains, каждый запрос с site:домен. Верни до 12 прямых URL конкретных рецептов.
-Сделай несколько запросов: нужны блюда для КАЖДОГО приёма пищи из meal_labels, с разнообразием.
+Сделай несколько запросов: нужны минимум три разных блюда для КАЖДОГО приёма пищи из meal_labels.
+Ищи запасные варианты для замены отдельных блюд. Приоритет — alternative_slots, если они переданы.
 Доступны Еда, Budget Bytes и 1000.menu. Для Budget Bytes ищи по-английски. Нужны schema.org Recipe,
 полный состав с количествами, число ПОРЦИЙ, шаги и фото блюда. Не выдумывай ссылки и не отвечай из памяти.
 Соблюдай restrictions и preferences. Бюджет общий на людей и budget_days; выбирай доступные продукты
@@ -272,15 +274,50 @@ def assemble(recipes, profile, inventory, days):
             break
     if estimate > budget:
         raise ProviderError("plan_over_budget")
-    # Store only used recipes; transient source-image files never become durable state.
-    selected = sorted({i for day in schedule for i in day})
-    remap = {old: new for new, old in enumerate(selected)}
+    # Keep verified alternatives and their source quantities for later single-slot replacements.
     return {"days": days, "people": profile["people"], "labels": meal_labels(profile["meals"]),
-            "recipes": [{k: v for k, v in recipes[i].items() if k not in {"picture", "items", "slots"}}
-                        for i in selected],
-            "schedule": [[remap[i] for i in day] for day in schedule], "shopping": shopping,
+            "recipes": [{k: v for k, v in r.items() if k != "picture"} for r in recipes],
+            "schedule": schedule, "shopping": shopping,
             "budget": budget, "estimate": round(estimate, 2), "currency": profile["currency"],
             "inventory_hash": fingerprint(inventory), "profile_hash": fingerprint(profile), "created": time.time()}
+
+
+def replace_meal(plan, position, replacement, inventory):
+    """Pure transaction: validate and price a copy before replacing one occurrence."""
+    if plan['inventory_hash'] != fingerprint(inventory):
+        raise ProviderError('plan_stock_changed')
+    day, slot = divmod(position, len(plan['labels']))
+    if not 0 <= day < plan['days'] or not 0 <= replacement < len(plan['recipes']):
+        raise ProviderError('plan_invalid_replacement')
+    if not all('items' in r and 'slots' in r for r in plan['recipes']):
+        raise ProviderError('plan_legacy')
+    if slot not in plan['recipes'][replacement]['slots']:
+        raise ProviderError('plan_invalid_replacement')
+    updated = copy.deepcopy(plan)
+    updated['schedule'][day][slot] = replacement
+    updated['shopping'] = shopping_list(updated['recipes'], updated['schedule'], updated['people'], inventory)
+    estimate = sum(row['estimate'] for row in updated['shopping'])
+    if estimate > updated['budget']:
+        raise ProviderError('plan_over_budget')
+    updated['estimate'] = round(estimate, 2)
+    return updated
+
+
+def alternatives(plan, position, inventory):
+    day, slot = divmod(position, len(plan['labels']))
+    if not 0 <= day < plan['days']:
+        return []
+    current = plan['schedule'][day][slot]
+    result = []
+    for index, recipe in enumerate(plan['recipes']):
+        if index == current or slot not in recipe.get('slots', []):
+            continue
+        try:
+            updated = replace_meal(plan, position, index, inventory)
+        except ProviderError:
+            continue
+        result.append((index, updated['estimate']))
+    return sorted(result, key=lambda item: item[1])
 
 
 class MealPlanner:
@@ -290,13 +327,15 @@ class MealPlanner:
     async def generate(self, profile, inventory, days, directory, remember, progress):
         if profile_question(profile) or not math.isfinite(profile['budget']) or days not in range(1, 15):
             raise ProviderError("plan_invalid_profile")
-        ready, tried = [], []
+        ready, tried, complete = [], [], None
         for batch in range(2):
             await progress("Ищу рецепты для каждого приёма пищи… Это может занять несколько минут.")
             found = await remember(f"plan_search:{batch}", lambda: self.luna.ask(
                 PLAN_SEARCH_PROMPT, SEARCH_SCHEMA, {"profile": profile, "inventory": inventory,
                     "days": days, "meal_labels": meal_labels(profile["meals"]),
-                    "allowed_domains": RECIPE_DOMAINS, "exclude_urls": tried}, search=True))
+                    "allowed_domains": RECIPE_DOMAINS, "exclude_urls": tried,
+                    "alternative_slots": [label for slot, label in enumerate(meal_labels(profile["meals"]))
+                        if sum(slot in r["slots"] for r in ready) < 3]}, search=True))
             urls = [u for u in dict.fromkeys(found["urls"]) if recipe_source(u) and u not in tried]
             tried.extend(urls)
             sources = await remember(f"plan_sources:{batch}", lambda: self.fetch(urls))
@@ -332,11 +371,16 @@ class MealPlanner:
                 if await remember(f"plan_photo:{batch}:{i}", verify):
                     ready.append(recipe)
             try:
-                return assemble(ready, profile, inventory, days)
+                complete = assemble(ready, profile, inventory, days)
+                if batch == 1 or all(sum(slot in r["slots"] for r in ready) >= 3
+                                     for slot in range(profile["meals"])):
+                    return complete
             except ProviderError as error:
                 if batch == 1:
                     raise
                 logging.info("plan_retry reason=%s", str(error))
+        if complete is not None:
+            return complete
         raise ProviderError("plan_incomplete")
 
     async def fetch(self, urls):

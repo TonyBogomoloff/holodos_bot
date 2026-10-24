@@ -5,11 +5,13 @@ from .planning import (
     PROFILE_PROMPT,
     PROFILE_SCHEMA,
     MealPlanner,
+    alternatives,
     amount,
     fingerprint,
     multiplier,
     number,
     profile_question,
+    replace_meal,
 )
 from .providers import ProviderError, prepare_image
 
@@ -86,7 +88,7 @@ class PlanningUI:
         self.bot.apply(job, state, 'planning')
         return True
 
-    async def callback(self, job, state, action, argument, directory):
+    async def callback(self, job, state, action, argument, directory, choice=None):
         bot = self.bot
         if action in {'plan', 'profile'}:
             self.enter(job, state, edit=action == 'profile')
@@ -132,7 +134,33 @@ class PlanningUI:
                 return True
             state['meal_plan'], state['plan_day'], state['panel'] = plan, 0, None
             state['rev'] += 1
-            bot.apply(job, state, 'shopping')
+            bot.apply(job, state, 'plan_day')
+        elif action in {'slot', 'alternatives', 'replace'}:
+            plan = state.get('meal_plan')
+            if not plan:
+                bot.apply(job, state, 'planning')
+                return True
+            position = int(argument if argument is not None else -1)
+            day, slot = divmod(position, len(plan['labels']))
+            if not 0 <= day < plan['days']:
+                return True
+            state['plan_day'], state['plan_slot'] = day, position
+            if action == 'replace':
+                index = int(choice if choice is not None else -1)
+                try:
+                    updated = replace_meal(plan, position, index, state['inventory'])
+                except ProviderError as error:
+                    if str(error) == 'plan_invalid_replacement':
+                        return True
+                    await bot.say(job, 'Эта замена сейчас недоступна: изменились запасы или не хватает бюджета.',
+                                  'replacement_unavailable')
+                    bot.apply(job, state, 'plan_alternatives')
+                    return True
+                state['meal_plan'] = updated
+                state['rev'] += 1
+                bot.apply(job, state, 'plan_day')
+            else:
+                bot.apply(job, state, 'plan_slot' if action == 'slot' else 'plan_alternatives')
         elif action in {'shopping', 'day', 'meal'}:
             plan = state.get('meal_plan')
             if not plan:
@@ -170,9 +198,38 @@ class PlanningUI:
                 markup(state, [[('Из холодильника', 'list')], [('План питания', 'plan')]]))
             return
         plan = state.get('meal_plan')
-        if view in {'shopping', 'plan_day'} and plan:
+        if view in {'shopping', 'plan_day', 'plan_slot', 'plan_alternatives'} and plan:
             fresh = plan['inventory_hash'] == fingerprint(state['inventory'])
-            if view == 'shopping':
+            if view in {'plan_slot', 'plan_alternatives'}:
+                position = state.get('plan_slot', 0)
+                day, slot = divmod(position, len(plan['labels']))
+                current = plan['schedule'][day][slot]
+                recipe = plan['recipes'][current]
+                text = (f"День {day + 1} · {plan['labels'][slot]}\n{recipe['title_ru']}\n"
+                        + nutrition_text(recipe['nutrition_estimate']))
+                rows = []
+                if view == 'plan_slot':
+                    rows.append([('Открыть рецепт', f'meal:{current}')])
+                    if all('items' in r for r in plan['recipes']):
+                        rows.append([('Выбрать другое блюдо', f'alternatives:{position}')])
+                    else:
+                        text += '\n\nДля замены блюд в этом старом плане составь новое меню.'
+                        rows.append([('Составить новое меню', f"build:{plan['days']}")])
+                elif not fresh:
+                    text += '\n\nЗапасы изменились. Обнови план перед заменой блюд.'
+                    rows.append([('Обновить план', f"build:{plan['days']}")])
+                else:
+                    options = alternatives(plan, position, state['inventory'])
+                    text += '\n\nВыбери замену только для этого приёма пищи:' if options else (
+                        '\n\nДругих проверенных вариантов в рамках бюджета пока нет.')
+                    for index, estimate in options:
+                        r = plan['recipes'][index]
+                        text += f"\n• {r['title_ru']} — {nutrition_text(r['nutrition_estimate'])}"
+                        rows.append([(r['title_ru'][:64], f'replace:{position}:{index}')])
+                    if not options:
+                        rows.append([('Составить новое меню', f"build:{plan['days']}")])
+                rows.append([('К меню дня', f'day:{day}'), ('Что докупить', 'shopping')])
+            elif view == 'shopping':
                 text = shopping_text(plan) if fresh else (
                     'Список продуктов изменился. Обнови план, чтобы пересчитать недостающие покупки.')
                 rows = [[('Показать меню', 'day:0')]]
@@ -182,6 +239,7 @@ class PlanningUI:
             else:
                 day = min(state.get('plan_day', 0), plan['days'] - 1)
                 parts, rows = [f"День {day + 1} из {plan['days']} · на {plan['people']} чел.",
+                               'Нажми на блюдо: открыть рецепт или выбрать другое.\n'
                                'КБЖУ примерные, на одну порцию каждого блюда.'], []
                 total = dict.fromkeys(['kcal', 'protein', 'fat', 'carbs'], 0)
                 for slot, index in enumerate(plan['schedule'][day]):
@@ -190,7 +248,7 @@ class PlanningUI:
                                   nutrition_text(recipe['nutrition_estimate'])])
                     for key in total:
                         total[key] += recipe['nutrition_estimate'][key]
-                    rows.append([(f"{plan['labels'][slot]}: {recipe['title_ru']}"[:64], f'meal:{index}')])
+                    rows.append([(f"{plan['labels'][slot]}: {recipe['title_ru']}"[:64], f'slot:{day * len(plan["labels"]) + slot}')])
                 parts.extend(['', 'За день на человека: ' + nutrition_text(total)])
                 if not fresh:
                     parts.extend(['', 'Запасы изменились — покупки нужно пересчитать.'])
@@ -201,7 +259,7 @@ class PlanningUI:
                     nav.append(('День ' + str(day + 2) + ' →', f'day:{day + 1}'))
                 if nav:
                     rows.append(nav)
-                rows.extend([[('Покупки', 'shopping'), ('План питания', 'plan')]])
+                rows.extend([[('Что докупить', 'shopping'), ('План питания', 'plan')]])
                 text = '\n'.join(parts)
         else:
             draft, profile = state.get('profile_draft'), state.get('profile')
@@ -216,11 +274,11 @@ class PlanningUI:
                 rows = [[('Сохранить профиль', 'saveprofile')]] if draft and not question else []
             else:
                 text = ('Твой план питания\n\n' + profile_text(profile)
-                        + '\n\nНа какой срок составить меню? Сначала покажу покупки, затем блюда.')
+                        + '\n\nНа какой срок составить меню? Сначала выберем блюда, потом составим покупки.')
                 rows = [[('На день', 'build:1'), ('На неделю', 'build:7')],
                         [('На две недели', 'build:14')], [('Изменить профиль', 'profile')]]
                 if plan:
-                    rows.insert(0, [('Моё меню', 'day:0'), ('Покупки', 'shopping')])
+                    rows.insert(0, [('Моё меню', 'day:0'), ('Что докупить', 'shopping')])
             rows.extend([[('Мои продукты', 'list'), ('Главное меню', 'home')]])
         # Send below the user's last action and pack long shopping lists safely as plain text.
         result = await self.bot.say(job, text, f'planning:{view}', markup(state, rows))

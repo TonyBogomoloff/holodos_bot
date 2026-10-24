@@ -14,9 +14,11 @@ from holodos_bot.planning import (
     PLAN_SEARCH_PROMPT,
     PROFILE_PROMPT,
     MealPlanner,
+    alternatives,
     analyze_recipes,
     assemble,
     quantity,
+    replace_meal,
     servings,
     shopping_list,
 )
@@ -185,7 +187,7 @@ def test_profile_plan_navigation_retry_persistence_and_deletion(tmp_path):
         assert store.session(1)['profile'] == PROFILE
         build = await handle(action='build:7')
         plan = store.session(1)['meal_plan']
-        assert telegram.sent[-1][1]['text'].startswith('Покупки на 7')
+        assert telegram.sent[-1][1]['text'].startswith('День 1 из 7')
         calls = len(model.calls)
         sent = len(telegram.sent)
         await bot.handle(build)
@@ -263,3 +265,92 @@ def test_plan_generation_burst_coalesces_through_restart(tmp_path):
     for update in range(2, 10):
         assert store.ingest(update, 1, payload)
     assert store.stats() == {'pending': 1}
+
+
+def test_single_meal_replacement_reprices_stock_and_rejects_invalid_choices(tmp_path):
+    plan = asyncio.run(generate(tmp_path))
+    rice = next(i for i, r in enumerate(plan['recipes']) if r['title_ru'] == 'Рис')
+    replacement = copy.deepcopy(plan['recipes'][rice])
+    replacement.update(title_ru='Гречка', url='https://www.budgetbytes.com/buckwheat/', slots=[1])
+    replacement['items'][0].update(name='гречка', inventory=[])
+    plan['recipes'].append(replacement)
+    chosen = len(plan['recipes']) - 1
+    before = copy.deepcopy(plan)
+    changed = replace_meal(plan, 1, chosen, INVENTORY)
+    assert plan == before
+    assert changed['schedule'][0] == [plan['schedule'][0][0], chosen, rice]
+    assert changed['schedule'][1:] == plan['schedule'][1:]
+    purchases = {r['name']: r for r in changed['shopping']}
+    assert purchases['рис']['required'] == 2600 and purchases['рис']['missing'] == 2100
+    assert purchases['гречка']['required'] == purchases['гречка']['missing'] == 200
+    assert changed['estimate'] == round(sum(r['estimate'] for r in changed['shopping']), 2)
+    assert chosen in dict(alternatives(plan, 1, INVENTORY))
+    for position, stock, reason in [(0, INVENTORY, 'plan_invalid_replacement'),
+                                    (21, INVENTORY, 'plan_invalid_replacement'),
+                                    (1, [], 'plan_stock_changed')]:
+        with pytest.raises(ProviderError, match=reason):
+            replace_meal(plan, position, chosen, stock)
+    plan['recipes'][chosen]['items'][0]['cost'] = 1000
+    with pytest.raises(ProviderError, match='plan_over_budget'):
+        replace_meal(plan, 1, chosen, INVENTORY)
+    assert alternatives(plan, 1, INVENTORY) == []
+
+
+def test_menu_alternatives_replace_retry_and_shopping_without_new_search(tmp_path):
+    async def run():
+        plan = await generate(tmp_path, inventory=[])
+        extra = copy.deepcopy(plan['recipes'][0])
+        extra.update(title_ru='Другой завтрак', url='https://www.budgetbytes.com/another/')
+        extra['items'][0].update(name='новый продукт', inventory=[])
+        plan['recipes'].append(extra)
+        # Retain even unused candidates when assembling a short plan.
+        short = assemble(plan['recipes'], PROFILE, [], 1)
+        assert len(short['recipes']) == 3 and all('items' in r for r in short['recipes'])
+        store, telegram, model = Store(tmp_path / 'replacement.sqlite'), Telegram(), Model()
+        state = store.session(1)
+        state.update(profile=PROFILE, meal_plan=plan, mode='plan')
+        with store.db:
+            store.save(1, state)
+        bot = Bot(Config('dummy:token', 'key', tmp_path), store, telegram, None, model, Web())
+        seq = 0
+        async def action(value, rev=None):
+            nonlocal seq
+            seq += 1
+            current = store.session(1)['rev'] if rev is None else rev
+            store.ingest(seq, 1, {'kind': 'callback', 'data': f'h:{current}:{value}'})
+            job = store.claim()
+            await bot.handle(job)
+            store.finish(job)
+            return job
+        await action('day:0')
+        assert ':slot:0' in str(telegram.sent[-1])
+        await action('slot:0')
+        assert 'Открыть рецепт' in str(telegram.sent[-1]) and 'Выбрать другое' in str(telegram.sent[-1])
+        await action('alternatives:0')
+        assert 'Другой завтрак' in str(telegram.sent[-1])
+        old_rev = store.session(1)['rev']
+        job = await action('replace:0:2')
+        changed = copy.deepcopy(store.session(1)['meal_plan'])
+        assert changed['schedule'][0][0] == 2
+        assert changed['schedule'][1:] == plan['schedule'][1:]
+        assert telegram.sent[-1][1]['text'].startswith('День 1 из 7')
+        sent = len(telegram.sent)
+        await bot.handle(job)
+        assert len(telegram.sent) == sent
+        await action('replace:0:0', rev=old_rev)
+        assert store.session(1)['meal_plan'] == changed
+        await action('shopping')
+        assert telegram.sent[-1][1]['text'].startswith('Покупки на 7')
+        assert 'новый продукт' in telegram.sent[-1][1]['text']
+        assert not model.calls
+        legacy = store.session(1)
+        for recipe in legacy['meal_plan']['recipes']:
+            recipe.pop('items')
+            recipe.pop('slots')
+        with store.db:
+            store.save(1, legacy)
+        await action('slot:0')
+        assert 'старом плане' in telegram.sent[-1][1]['text']
+        assert 'Открыть рецепт' in str(telegram.sent[-1])
+        store.close()
+    asyncio.run(run())
