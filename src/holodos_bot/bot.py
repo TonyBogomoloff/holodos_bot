@@ -391,7 +391,7 @@ class Bot:
                 pictures.append((Path(r["picture"]), caption))
                 rows.append([{"text": f"{i + 1}. {r['title_ru']}"[:64], "callback_data": f"h:{rev}:pick:{i}"}])
             await self.effect(job, "album", lambda: self.telegram.album(job["owner"], pictures))
-            text = f"Нашёл {len(found)} блюд. Что приготовим?"
+            text = f"Подходящие блюда: {len(found)}. Что приготовим?"
         else:
             text = "Пока не нашёл подходящих рецептов с фото. Добавь продукты или разреши небольшую докупку."
         if len(found) < 5:
