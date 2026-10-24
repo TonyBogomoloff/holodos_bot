@@ -154,6 +154,7 @@ def test_recipe_click_burst_calls_luna_and_sends_recipe_once(tmp_path):
             calls = 0
             async def ask(self, *args, **kwargs):
                 self.calls += 1
+                assert telegram.sent[-1][1]['text'] == 'Загружаю рецепт…'
                 # Realistic separate callbacks received while Luna is working.
                 for update in range(2, 12):
                     assert store.ingest(update, 1, {**payload, 'callback_id': str(update)})
@@ -166,8 +167,26 @@ def test_recipe_click_burst_calls_luna_and_sends_recipe_once(tmp_path):
         store.finish(job)
         assert store.claim() is None
         assert model.calls == 1
-        assert len(telegram.sent) == 1
-        text = telegram.sent[0][1]['text']
+        assert [method for method, _ in telegram.sent] == ['sendMessage', 'editMessageText']
+        assert telegram.sent[1][1]['message_id'] == 1
+        text = telegram.sent[1][1]['text']
+        assert text.startswith('<b>Яйца</b>\n<a href="https://www.budgetbytes.com/test/">Источник</a>')
+        assert '<b>Ингредиенты:</b>' in text and '<b>Как приготовить:</b>' in text
+        assert '<i>Сверь количество продуктов перед готовкой.</i>' in text
+        store.ingest(12, 1, {'kind': 'callback', 'data': f"h:{state['rev']}:choices"})
+        choices_job = store.claim()
+        await bot.handle(choices_job)
+        store.finish(choices_job)
+        assert telegram.sent[-1][0] == 'sendMessage'
+        assert telegram.sent[-1][1]['reply_markup']['inline_keyboard'][0][0]['text'] == '1. Яйца'
+        assert model.calls == 1
+        store.ingest(13, 1, payload)
+        repeat_job = store.claim()
+        await bot.handle(repeat_job)
+        store.finish(repeat_job)
+        assert model.calls == 1
+        assert telegram.sent[-1][0] == 'editMessageText'
+        assert telegram.sent[-1][1]['text'] == text
         assert '1. Вари 5 минут.\n\n2. Подавай.' in text
         assert '• 2 яйца' in text and state['recipes'][0]['url'] in text
         assert store.db.execute('SELECT used FROM quota WHERE owner=1').fetchone()[0] == 1

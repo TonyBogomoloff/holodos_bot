@@ -105,7 +105,7 @@ async def run(args):
                     class Telegram:
                         messages = []
                         async def call(self, method, **payload):
-                            assert method == 'sendMessage', 'unexpected_telegram_operation'
+                            assert method in {'sendMessage', 'editMessageText'}, 'unexpected_telegram_operation'
                             self.messages.append(payload['text'])
                             return {'message_id': len(self.messages)}
                     model, telegram = Model(), Telegram()
@@ -119,7 +119,16 @@ async def run(args):
                     assert job['cache']['selected']['translation_status'] == 'translated', 'translation_fallback'
                     text = '\n'.join(telegram.messages)
                     assert '\n\n2. ' in text, 'missing_step_spacing'
-                    assert text.count('Источник: ') == 1, 'duplicate_recipe'
+                    assert text.count('>Источник</a>') == 1, 'duplicate_recipe'
+                    assert telegram.messages[0] == 'Загружаю рецепт…'
+                    assert '<b>Ингредиенты:</b>' in text and '<b>Как приготовить:</b>' in text
+                    calls = model.calls
+                    store.ingest(12, 1, {'kind': 'callback', 'data': f"h:{state['rev']}:choices"})
+                    choices_job = store.claim()
+                    await bot.handle(choices_job)
+                    store.finish(choices_job)
+                    assert model.calls == calls, 'choices_called_model'
+                    assert telegram.messages[-1].startswith('Подходящие блюда:')
                     report['recipe'] = {'clicks': 11, 'recipes_sent': 1, 'luna_calls': model.calls,
                                         'step_spacing': 'ok', 'translation_status': 'translated'}
                 finally:

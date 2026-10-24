@@ -190,10 +190,17 @@ class Bot:
                     index = int(match[3] or -1)
                     if not 0 <= index < len(state["recipes"]):
                         return
-                    if not await self.limit(job):
-                        return
                     recipe = state["recipes"][index]
-                    translated = await self.cached(job, "translation", lambda: self.recipes.render(recipe))
+                    if "rendered" not in recipe and not await self.limit(job):
+                        return
+                    progress = await self.say(job, "Загружаю рецепт…", "recipe_progress",
+                                              {"inline_keyboard": []})
+                    self.store.checkpoint(job, "recipe_panel", progress["message_id"])
+                    translated = recipe.get("rendered")
+                    if translated is None:
+                        translated = await self.cached(job, "translation", lambda: self.recipes.render(recipe))
+                        if translated.get("translation_status") == "translated":
+                            recipe["rendered"] = translated
                     self.store.checkpoint(job, "selected", {**recipe, **translated})
                     self.apply(job, state, "recipe")
                 elif action == "choices":
@@ -333,7 +340,11 @@ class Bot:
             rows = [[{"text": f"{i + 1}. {r['title_ru']}"[:64],
                       "callback_data": f"h:{state['rev']}:pick:{i}"}] for i, r in enumerate(state["recipes"])]
             rows.append([{"text": "Мои продукты", "callback_data": f"h:{state['rev']}:list"}])
-            await self.panel(job, state, "Какое блюдо посмотрим?", {"inline_keyboard": rows})
+            result = await self.say(job, f"Подходящие блюда: {len(state['recipes'])}. Что приготовим?",
+                                    "saved_choices", {"inline_keyboard": rows})
+            state["panel"] = result["message_id"]
+            with self.store.db:
+                self.store.save(job["owner"], state)
         elif applied["view"] == "recipe":
             await self.show_recipe(job, state)
         else:
@@ -411,26 +422,69 @@ class Bot:
 
     async def show_recipe(self, job, state):
         r = job["cache"]["selected"]
-        parts = [r.get("title_ru", r["title"]), "", "Ингредиенты:",
-                 *["• " + x for x in r["ingredients"]], "", "Как приготовить:",
-                 "\n\n".join(f"{i + 1}. {x.strip()}" for i, x in enumerate(r["steps"]))]
-        if r.get('translation_status') == 'source':
-            parts.insert(2, 'Оригинальный рецепт:\n')
+        # Luna supplies validated content; the bot applies consistent Telegram formatting.
+        # Escape source/model text before adding our own tags.
+        def lines(value):
+            return [html.escape(piece) for piece in chunks(value, 500)]
+        title = " ".join(r.get("title_ru", r["title"]).split())
+        parts = [f"<b>{html.escape(title)}</b>",
+                 f'<a href="{html.escape(r["url"], quote=True)}">Источник</a>', ""]
+        if r.get("translation_status") == "source":
+            parts.extend(["<i>Оригинальный рецепт</i>", ""])
+        parts.append("<b>Ингредиенты:</b>")
+        for ingredient in r["ingredients"]:
+            parts.extend(lines("• " + ingredient))
+        parts.extend(["", "<b>Как приготовить:</b>"])
+        for i, step in enumerate(r["steps"], 1):
+            parts.extend(lines(f"{i}. {step.strip()}"))
+            parts.append("")
         if r.get("time"):
             duration = re.fullmatch(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", r["time"])
             if duration:
                 formatted = " ".join(f"{x} {unit}" for x, unit in zip(duration.groups(), ("ч", "мин", "сек"))
                                      if x and int(x))
                 if formatted:
-                    parts.extend(["", "Время: " + formatted])
+                    parts.append("<b>Время:</b> " + formatted)
         if r.get("yield"):
-            parts.append("Порции: " + r["yield"])
+            parts.append("<b>Порции:</b>")
+            parts.extend(lines(r["yield"]))
         if r.get("missing"):
-            parts.append("Докупить: " + ", ".join(r["missing"]))
-        parts.extend(["", "Сверь количество продуктов перед готовкой.", "Источник: " + r["url"]])
+            parts.append("<b>Докупить:</b>")
+            parts.extend(lines(", ".join(r["missing"])))
+        parts.extend(["", "<i>Сверь количество продуктов перед готовкой.</i>"])
         markup = {"inline_keyboard": [[{"text": "Другие блюда", "callback_data": f"h:{state['rev']}:choices"},
                                         {"text": "Мои продукты", "callback_data": f"h:{state['rev']}:list"}]]}
-        await self.say(job, "\n".join(parts), "recipe", markup)
+        # Pack complete escaped lines so tags and HTML entities never cross messages.
+        pieces, piece = [], ""
+        for line in parts:
+            if piece and len(piece) + len(line) + 1 > 3800:
+                pieces.append(piece)
+                piece = ""
+            piece += ("\n" if piece else "") + line
+        if piece:
+            pieces.append(piece)
+        message_id = job["cache"].get("recipe_panel")
+        if message_id:
+            try:
+                await self.telegram.call("editMessageText", chat_id=job["owner"], message_id=message_id,
+                    text=pieces[0], parse_mode="HTML",
+                    reply_markup=markup if len(pieces) == 1 else {"inline_keyboard": []},
+                    link_preview_options={"is_disabled": True})
+            except ProviderError as e:
+                if str(e) != "telegram_edit_missing":
+                    raise
+                message_id = None
+        if not message_id:
+            result = await self.say(job, pieces[0], "recipe", markup if len(pieces) == 1 else None,
+                                    html_mode=True)
+            message_id = result["message_id"]
+        for i, piece in enumerate(pieces[1:], 1):
+            result = await self.say(job, piece, f"recipe_continued:{i}",
+                                    markup if i == len(pieces) - 1 else None, html_mode=True)
+            message_id = result["message_id"]
+        state["panel"] = message_id
+        with self.store.db:
+            self.store.save(job["owner"], state)
 
     async def poll(self):
         while not self.stop.is_set():
