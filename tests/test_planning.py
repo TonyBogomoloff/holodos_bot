@@ -354,3 +354,48 @@ def test_menu_alternatives_replace_retry_and_shopping_without_new_search(tmp_pat
         assert 'Открыть рецепт' in str(telegram.sent[-1])
         store.close()
     asyncio.run(run())
+
+
+def test_refine_voice_keeps_profile_menu_and_budget_then_offers_new_verified_recipes(tmp_path):
+    async def run():
+        plan = await generate(tmp_path, inventory=[])
+        class Focused(Model):
+            async def ask(self, prompt, schema, payload, **kwargs):
+                if prompt == PLAN_SEARCH_PROMPT:
+                    assert kwargs['search'] and payload['meal_labels'] == ['Завтрак']
+                    assert 'Хочу омлет' in payload['profile']['preferences']
+                    assert payload['profile']['restrictions'] == PROFILE['restrictions']
+                    return {'urls': ['https://www.budgetbytes.com/omelet/']}
+                return await super().ask(prompt, schema, payload, **kwargs)
+        store, telegram, model = Store(tmp_path / 'refine.sqlite'), Telegram(), Focused()
+        state = store.session(1)
+        state.update(profile=copy.deepcopy(PROFILE), meal_plan=plan, mode='plan')
+        with store.db:
+            store.save(1, state)
+        bot = Bot(Config('dummy:token', 'key', tmp_path), store, telegram, None, model, Web())
+        async def dispatch(seq, payload, transcript=None):
+            store.ingest(seq, 1, payload)
+            job = store.claim()
+            if transcript:
+                store.checkpoint(job, 'transcript', transcript)
+            await bot.handle(job)
+            store.finish(job)
+            return job
+        await dispatch(1, {'kind': 'callback', 'data': f"h:{state['rev']}:refine:0"})
+        assert 'пришли голосовое' in telegram.sent[-1][1]['text']
+        job = await dispatch(2, {'kind': 'voice', 'duration': 3, 'file_id': 'dummy'}, 'Хочу омлет')
+        updated = store.session(1)
+        assert updated['profile'] == PROFILE and updated.get('profile_draft') is None
+        assert updated['meal_plan']['schedule'] == plan['schedule']
+        assert updated['meal_plan']['shopping'] == plan['shopping']
+        assert updated.get('refine_position') is None
+        assert updated['meal_plan']['refinements']['0']['indices'] == [2]
+        assert ':replace:0:2' in str(telegram.sent[-1])
+        calls, sent = len(model.calls), len(telegram.sent)
+        await bot.handle(job)
+        assert len(model.calls) == calls and len(telegram.sent) == sent
+        await dispatch(3, {'kind': 'callback', 'data': f"h:{updated['rev']}:refine:0"})
+        await dispatch(4, {'kind': 'callback', 'data': f"h:{store.session(1)['rev']}:day:0"})
+        assert store.session(1).get('refine_position') is None
+        store.close()
+    asyncio.run(run())

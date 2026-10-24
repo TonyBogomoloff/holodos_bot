@@ -59,7 +59,7 @@ def prepare(args):
     run([python, '-m', 'pip', 'install', '-q', '-r', 'requirements.lock'], cwd=candidate)
     run([python, '-m', 'pip', 'install', '-q', '--no-deps', '-e', '.'], cwd=candidate)
     run([python, '-m', 'ruff', 'check', 'src', 'scripts', 'tests'], cwd=candidate)
-    run([python, '-m', 'pytest', '-q'], cwd=candidate)
+    run([python, '-m', 'pytest', '-q', *args.tests], cwd=candidate)
     config = APP / 'config.json'
     if not config.exists():
         value = json.loads((candidate / 'config.example.json').read_text())
@@ -70,7 +70,7 @@ def prepare(args):
     run([python, '-m', 'holodos_bot', 'check', '--config', str(config)], cwd=candidate)
     verify(candidate)
     receipt = {'sha': manifest['sha'], 'manifest_hash': digest((candidate / 'release.json').read_bytes()),
-               'checks': ['ruff', 'pytest', 'telegram_getMe', 'chatgpt_auth'], 'created': time.time()}
+               'checks': ['ruff', 'pytest', 'telegram_getMe', 'chatgpt_auth'], 'test_paths': args.tests, 'created': time.time()}
     (candidate / 'validation.json').write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt))
 
@@ -172,7 +172,10 @@ if __name__ == '__main__':
     command.add_argument('--output', type=Path, required=True)
     command.add_argument('--base', default=None)
     for name in ('prepare', 'install'):
-        sub.add_parser(name).add_argument('--candidate', type=Path, required=True)
+        command = sub.add_parser(name)
+        command.add_argument('--candidate', type=Path, required=True)
+        if name == 'prepare':
+            command.add_argument('--tests', nargs='+', default=['tests'])
     sub.add_parser('status')
     args = parser.parse_args()
     {'build': build, 'prepare': prepare, 'install': install, 'status': status}[args.command](args)

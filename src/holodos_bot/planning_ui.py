@@ -69,6 +69,7 @@ class PlanningUI:
         self.engine = MealPlanner(luna, web)
 
     def enter(self, job, state, edit=False):
+        state.pop('refine_position', None)
         state['mode'], state['panel'] = 'plan', None
         if edit or (not state.get('profile') and state.get('profile_draft') is None):
             state['profile_draft'] = dict(state.get('profile') or {})
@@ -78,6 +79,28 @@ class PlanningUI:
     async def text(self, job, state, text):
         if state.get('mode') != 'plan':
             return False
+        if state.get('refine_position') is not None:
+            position = state['refine_position']
+            async def remember(key, operation):
+                return await self.bot.cached(job, 'refine:' + key, operation)
+            async def progress(message):
+                await self.bot.panel(job, state, message, {'inline_keyboard': []})
+            try:
+                updated = await self.bot.cached(job, 'refined_plan', lambda: self.engine.refine(
+                    state['meal_plan'], state['profile'], state['inventory'], position, text,
+                    self.bot.work / str(job['id']), remember, progress))
+            except ProviderError as error:
+                if str(error) not in {'plan_incomplete', 'plan_over_budget', 'plan_stock_changed', 'plan_legacy'}:
+                    raise
+                await self.bot.say(job, 'Не нашёл подходящих проверенных вариантов в рамках бюджета. '
+                    'Попробуй другое пожелание. Если запасы изменились — обнови меню.', 'refine_unavailable')
+                self.bot.apply(job, state, 'plan_refine')
+                return True
+            state['meal_plan'], state['plan_slot'] = updated, position
+            state.pop('refine_position', None)
+            state['rev'] += 1
+            self.bot.apply(job, state, 'plan_alternatives')
+            return True
         draft = state.get('profile_draft')
         if draft is None:
             draft = state.get('profile') or {}
@@ -90,6 +113,7 @@ class PlanningUI:
 
     async def callback(self, job, state, action, argument, directory, choice=None):
         bot = self.bot
+        state.pop("refine_position", None)
         if action in {'plan', 'profile'}:
             self.enter(job, state, edit=action == 'profile')
         elif action == 'home':
@@ -135,7 +159,7 @@ class PlanningUI:
             state['meal_plan'], state['plan_day'], state['panel'] = plan, 0, None
             state['rev'] += 1
             bot.apply(job, state, 'plan_day')
-        elif action in {'slot', 'alternatives', 'replace'}:
+        elif action in {'slot', 'alternatives', 'replace', 'refine'}:
             plan = state.get('meal_plan')
             if not plan:
                 bot.apply(job, state, 'planning')
@@ -145,7 +169,11 @@ class PlanningUI:
             if not 0 <= day < plan['days']:
                 return True
             state['plan_day'], state['plan_slot'] = day, position
-            if action == 'replace':
+            if action == 'refine':
+                state['mode'], state['refine_position'] = 'plan', position
+                state['rev'] += 1
+                bot.apply(job, state, 'plan_refine')
+            elif action == 'replace':
                 index = int(choice if choice is not None else -1)
                 try:
                     updated = replace_meal(plan, position, index, state['inventory'])
@@ -198,9 +226,9 @@ class PlanningUI:
                 markup(state, [[('Из холодильника', 'list')], [('План питания', 'plan')]]))
             return
         plan = state.get('meal_plan')
-        if view in {'shopping', 'plan_day', 'plan_slot', 'plan_alternatives'} and plan:
+        if view in {'shopping', 'plan_day', 'plan_slot', 'plan_alternatives', 'plan_refine'} and plan:
             fresh = plan['inventory_hash'] == fingerprint(state['inventory'])
-            if view in {'plan_slot', 'plan_alternatives'}:
+            if view in {'plan_slot', 'plan_alternatives', 'plan_refine'}:
                 position = state.get('plan_slot', 0)
                 day, slot = divmod(position, len(plan['labels']))
                 current = plan['schedule'][day][slot]
@@ -208,7 +236,12 @@ class PlanningUI:
                 text = (f"День {day + 1} · {plan['labels'][slot]}\n{recipe['title_ru']}\n"
                         + nutrition_text(recipe['nutrition_estimate']))
                 rows = []
-                if view == 'plan_slot':
+                if view == 'plan_refine':
+                    text += ('\n\nНапиши или пришли голосовое: что хочешь на этот приём пищи? '
+                             'Например: «Хочу несладкую кашу, без яиц».\n'
+                             'Найду варианты для этого дня. Ограничения профиля сохраняются. '
+                             'Блюдо поменяется, когда выберешь замену.')
+                elif view == 'plan_slot':
                     rows.append([('Открыть рецепт', f'meal:{current}')])
                     if all('items' in r for r in plan['recipes']):
                         rows.append([('Выбрать другое блюдо', f'alternatives:{position}')])
@@ -220,6 +253,10 @@ class PlanningUI:
                     rows.append([('Обновить план', f"build:{plan['days']}")])
                 else:
                     options = alternatives(plan, position, state['inventory'])
+                    refinement = plan.get('refinements', {}).get(str(position))
+                    if refinement:
+                        options = [(i, cost) for i, cost in options if i in refinement['indices']]
+                        text += '\n\nТвоё пожелание: ' + refinement['wish']
                     text += '\n\nВыбери замену только для этого приёма пищи:' if options else (
                         '\n\nДругих проверенных вариантов в рамках бюджета пока нет.')
                     for index, estimate in options:
@@ -228,6 +265,8 @@ class PlanningUI:
                         rows.append([(r['title_ru'][:64], f'replace:{position}:{index}')])
                     if not options:
                         rows.append([('Составить новое меню', f"build:{plan['days']}")])
+                if fresh and all('items' in r for r in plan['recipes']) and view != 'plan_refine':
+                    rows.append([('Уточнить предпочтения', f'refine:{position}')])
                 rows.append([('К меню дня', f'day:{day}'), ('Что докупить', 'shopping')])
             elif view == 'shopping':
                 text = shopping_text(plan) if fresh else (

@@ -185,7 +185,7 @@ class Bot:
             p = job["payload"]
             if p["kind"] == "callback":
                 match = re.fullmatch(r"h:(\d+):(recognize|search|shop|undo|add|new|list|pick|choices|"
-                                     r"home|plan|profile|saveprofile|build|shopping|day|meal|slot|alternatives|replace)(?::(\d+))?(?::(\d+))?",
+                                     r"home|plan|profile|saveprofile|build|shopping|day|meal|slot|alternatives|replace|refine)(?::(\d+))?(?::(\d+))?",
                                      p["data"])
                 if not match or (match[4] is not None and match[2] != "replace") or int(match[1]) != state["rev"]:
                     await self.say(job, "Этот список уже изменился. Вот актуальный", "stale")
@@ -283,6 +283,7 @@ class Bot:
                 text = p.get("text", "").strip()
                 command = text.split(maxsplit=1)[0].split("@")[0].lower() if text.startswith("/") else ""
                 if command in {"/start", "/products", "/cancel"}:
+                    state.pop('refine_position', None)
                     state['panel'], state['profile_draft'] = None, None
                     state['mode'] = 'inventory' if command == '/products' else 'home'
                     state['rev'] += 1
@@ -357,7 +358,7 @@ class Bot:
         applied = job["cache"]["applied"]
         # State and applied checkpoint are committed together; retries never apply a correction twice.
         state = self.store.session(job["owner"])
-        if applied['view'] in {'home', 'planning', 'shopping', 'plan_day', 'plan_slot', 'plan_alternatives'}:
+        if applied['view'] in {'home', 'planning', 'shopping', 'plan_day', 'plan_slot', 'plan_alternatives', 'plan_refine'}:
             await self.planning.show(job, state, applied['view'])
         elif applied["view"] == "results":
             await self.show_results(job, state)

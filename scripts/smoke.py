@@ -17,7 +17,6 @@ from holodos_bot.planning import (
     PROFILE_PROMPT,
     PROFILE_SCHEMA,
     MealPlanner,
-    alternatives,
     profile_question,
 )
 from holodos_bot.providers import Groq, Luna, prepare_image
@@ -95,17 +94,25 @@ async def run(args):
                     state.update(profile=profile, meal_plan=plan, inventory=inventory, mode='plan')
                     with store.db:
                         store.save(1, state)
-                    position, choices = next((position, choices) for position in range(21)
-                        if (choices := alternatives(plan, position, inventory)))
-                    replacement = choices[0][0]
-                    actions = ['day:0', f'slot:{position}', f'alternatives:{position}',
-                               f'replace:{position}:{replacement}', 'shopping', f'meal:{replacement}']
-                    for i, action in enumerate(actions, 1):
+                    async def deliver(i, action=None, text=None):
                         rev = store.session(1)['rev']
-                        store.ingest(i, 1, {'kind': 'callback', 'data': f"h:{rev}:{action}"})
+                        payload = {'kind': 'text', 'text': text} if text else {
+                            'kind': 'callback', 'data': f"h:{rev}:{action}"}
+                        store.ingest(i, 1, payload)
                         job = store.claim()
                         await bot.handle(job)
                         store.finish(job)
+                    await deliver(1, 'day:0')
+                    await deliver(2, 'refine:0')
+                    await deliver(3, text='Хочу несладкий завтрак с яйцами.')
+                    refined = store.session(1)['meal_plan']
+                    assert refined['schedule'] == plan['schedule'] and refined['shopping'] == plan['shopping']
+                    assert store.session(1)['profile'] == profile
+                    choices = refined['refinements']['0']['indices']
+                    assert choices
+                    replacement = choices[0]
+                    for i, action in enumerate([f'replace:0:{replacement}', 'shopping', f'meal:{replacement}'], 4):
+                        await deliver(i, action)
                     changed = store.session(1)['meal_plan']
                     assert sum(a != b for old, new in zip(plan['schedule'], changed['schedule'])
                                for a, b in zip(old, new)) == 1
@@ -114,7 +121,7 @@ async def run(args):
                     assert telegram.photos and 'На одну порцию' in telegram.messages[-1][1]['text']
                     report['planning'] = {'days': 7, 'people': 2, 'meals': 21,
                         'verified_recipes': len(plan['recipes']), 'alternatives': len(choices),
-                        'single_meal_replacement': 'passed', 'menu_first': True, 'shopping_items': len(plan['shopping']),
+                        'preference_search': 'passed', 'single_meal_replacement': 'passed', 'menu_first': True, 'shopping_items': len(plan['shopping']),
                         'shopping_needs_clarification': sum(r['check'] for r in plan['shopping']),
                         'within_estimated_budget': True, 'profile': 'parsed', 'source_photo': 'delivered_to_stub',
                         'missing_currency': 'asked', 'allergy_edit': 'preserved', 'diet_conflict': 'rejected',

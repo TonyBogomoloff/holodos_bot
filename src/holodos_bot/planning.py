@@ -324,17 +324,18 @@ class MealPlanner:
     def __init__(self, luna, web):
         self.luna, self.web = luna, web
 
-    async def generate(self, profile, inventory, days, directory, remember, progress):
+    async def generate(self, profile, inventory, days, directory, remember, progress, *, label=None, exclude=()):
         if profile_question(profile) or not math.isfinite(profile['budget']) or days not in range(1, 15):
             raise ProviderError("plan_invalid_profile")
-        ready, tried, complete = [], [], None
+        ready, tried, complete = [], list(exclude), None
+        labels = [label] if label else meal_labels(profile["meals"])
         for batch in range(2):
             await progress("Ищу рецепты для каждого приёма пищи… Это может занять несколько минут.")
             found = await remember(f"plan_search:{batch}", lambda: self.luna.ask(
                 PLAN_SEARCH_PROMPT, SEARCH_SCHEMA, {"profile": profile, "inventory": inventory,
-                    "days": days, "meal_labels": meal_labels(profile["meals"]),
+                    "days": days, "meal_labels": labels,
                     "allowed_domains": RECIPE_DOMAINS, "exclude_urls": tried,
-                    "alternative_slots": [label for slot, label in enumerate(meal_labels(profile["meals"]))
+                    "alternative_slots": [label for slot, label in enumerate(labels)
                         if sum(slot in r["slots"] for r in ready) < 3]}, search=True))
             urls = [u for u in dict.fromkeys(found["urls"]) if recipe_source(u) and u not in tried]
             tried.extend(urls)
@@ -344,7 +345,7 @@ class MealPlanner:
             await progress("Проверяю состав, порции и ограничения питания…")
             analysis = await remember(f"plan_analysis:{batch}", lambda: self.luna.ask(
                 ANALYSIS_PROMPT, ANALYSIS_SCHEMA, {"profile": profile, "inventory": inventory,
-                    "meal_labels": meal_labels(profile["meals"]),
+                    "meal_labels": labels,
                     "recipes": [{**r, "id": i} for i, r in enumerate(sources)]}))
             candidates = analyze_recipes(analysis, sources, inventory, profile["meals"])
             audit = await remember(f"plan_audit:{batch}", lambda: self.luna.ask(
@@ -370,6 +371,10 @@ class MealPlanner:
                         return False
                 if await remember(f"plan_photo:{batch}:{i}", verify):
                     ready.append(recipe)
+            if label:
+                if ready:
+                    return ready
+                continue
             try:
                 complete = assemble(ready, profile, inventory, days)
                 if batch == 1 or all(sum(slot in r["slots"] for r in ready) >= 3
@@ -382,6 +387,33 @@ class MealPlanner:
         if complete is not None:
             return complete
         raise ProviderError("plan_incomplete")
+
+    async def refine(self, plan, profile, inventory, position, wish, directory, remember, progress):
+        if plan['inventory_hash'] != fingerprint(inventory):
+            raise ProviderError('plan_stock_changed')
+        day, slot = divmod(position, len(plan['labels']))
+        if not 0 <= day < plan['days'] or not all('items' in r for r in plan['recipes']):
+            raise ProviderError('plan_legacy')
+        focused = {**profile, 'meals': 1,
+                   'preferences': profile['preferences'] + '\nПожелание для этого приёма пищи: ' + wish}
+        candidates = await self.generate(focused, inventory, 1, directory, remember, progress,
+            label=plan['labels'][slot], exclude=[r['url'] for r in plan['recipes']])
+        updated = copy.deepcopy(plan)
+        indices = []
+        for recipe in candidates:
+            recipe['slots'] = [slot]
+            index = len(updated['recipes'])
+            updated['recipes'].append(recipe)
+            try:
+                replace_meal(updated, position, index, inventory)
+            except ProviderError:
+                updated['recipes'].pop()
+            else:
+                indices.append(index)
+        if not indices:
+            raise ProviderError('plan_incomplete')
+        updated.setdefault('refinements', {})[str(position)] = {'wish': wish, 'indices': indices}
+        return updated
 
     async def fetch(self, urls):
         semaphore = asyncio.Semaphore(3)
