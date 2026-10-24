@@ -363,7 +363,7 @@ class Bot:
         r = job["cache"]["selected"]
         parts = [r.get("title_ru", r["title"]), "", "Ингредиенты:",
                  *["• " + x for x in r["ingredients"]], "", "Как приготовить:",
-                 *[f"{i + 1}. {x}" for i, x in enumerate(r["steps"])]]
+                 "\n\n".join(f"{i + 1}. {x.strip()}" for i, x in enumerate(r["steps"]))]
         if r.get('translation_status') == 'source':
             parts.insert(2, 'Оригинальный рецепт:\n')
         if r.get("time"):

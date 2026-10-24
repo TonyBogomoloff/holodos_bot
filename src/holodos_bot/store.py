@@ -1,4 +1,5 @@
 import json
+import re
 import secrets
 import sqlite3
 import time
@@ -61,11 +62,24 @@ class Store:
         accepted = True
         with self.db:
             if owner and payload:
+                # Callback IDs differ on every tap. Coalesce the same dish while its
+                # durable job is queued, running, or waiting for a retry.
+                duplicate_pick = (
+                    payload.get('kind') == 'callback'
+                    and re.fullmatch(r'h:\d+:pick:\d+', payload.get('data', ''))
+                    and self.db.execute(
+                        "SELECT 1 FROM jobs WHERE owner=? AND status IN ('pending','running') "
+                        "AND json_extract(payload,'$.kind')='callback' "
+                        "AND json_extract(payload,'$.data')=? LIMIT 1",
+                        (owner, payload['data'])).fetchone()
+                )
                 pending = self.db.execute("SELECT COUNT(*) FROM jobs WHERE owner=? AND status IN "
                                           "('pending','running')", (owner,)).fetchone()[0]
                 total = self.db.execute("SELECT COUNT(*) FROM jobs WHERE status IN ('pending','running')").fetchone()[0]
                 # Bound incoming work without acknowledging and discarding accepted jobs later.
-                if pending < 25 and total < 500:
+                if duplicate_pick:
+                    pass  # Acknowledge the update and advance the offset without another job.
+                elif pending < 25 and total < 500:
                     self.db.execute("INSERT OR IGNORE INTO jobs(update_id,owner,payload,created) VALUES(?,?,?,?)",
                                     (update_id, owner, encoded(payload), time.time()))
                 elif not self.db.execute("SELECT 1 FROM jobs WHERE update_id=?", (update_id,)).fetchone():

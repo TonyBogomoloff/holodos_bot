@@ -96,3 +96,37 @@ def test_voice_correction_applies_once_after_delivery_failure(tmp_path):
         assert store.session(1)['rev'] == revision
         assert store.session(1)['previous'][0][0]['name'] == 'молоко'
     asyncio.run(run())
+
+
+def test_recipe_click_burst_calls_luna_and_sends_recipe_once(tmp_path):
+    async def run():
+        store, telegram = Store(tmp_path / 'db.sqlite'), Telegram()
+        state = store.session(1)
+        state['recipes'] = [{'title': 'Eggs', 'title_ru': 'Яйца', 'ingredients': ['2 eggs'],
+                             'steps': ['Boil for 5 minutes.', 'Serve.'],
+                             'url': 'https://www.budgetbytes.com/test/'}]
+        with store.db:
+            store.save(1, state)
+        payload = {'kind': 'callback', 'data': f"h:{state['rev']}:pick:0"}
+        class Model:
+            calls = 0
+            async def ask(self, *args, **kwargs):
+                self.calls += 1
+                # Realistic separate callbacks received while Luna is working.
+                for update in range(2, 12):
+                    assert store.ingest(update, 1, {**payload, 'callback_id': str(update)})
+                return {'ingredients': ['2 яйца'], 'steps': ['Вари 5 минут.', 'Подавай.']}
+        model = Model()
+        bot = Bot(Config('dummy:token', 'key', tmp_path), store, telegram, None, model, None)
+        store.ingest(1, 1, payload)
+        job = store.claim()
+        await bot.handle(job)
+        store.finish(job)
+        assert store.claim() is None
+        assert model.calls == 1
+        assert len(telegram.sent) == 1
+        text = telegram.sent[0][1]['text']
+        assert '1. Вари 5 минут.\n\n2. Подавай.' in text
+        assert '• 2 яйца' in text and state['recipes'][0]['url'] in text
+        assert store.db.execute('SELECT used FROM quota WHERE owner=1').fetchone()[0] == 1
+    asyncio.run(run())

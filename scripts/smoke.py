@@ -4,10 +4,12 @@ import asyncio
 import json
 import logging
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
+from holodos_bot.bot import Bot
 from holodos_bot.config import Config
 from holodos_bot.providers import Groq, Luna, prepare_image
 from holodos_bot.recipes import (
@@ -18,6 +20,7 @@ from holodos_bot.recipes import (
     extract_recipe,
     recipe_source,
 )
+from holodos_bot.store import Store
 
 SOURCE_SAMPLES = {
     'eda.rambler.ru': 'https://eda.rambler.ru/recepty/zavtraki/sirniki-iz-tvoroga-18506',
@@ -33,6 +36,45 @@ async def run(args):
     try:
         with tempfile.TemporaryDirectory(prefix="holodos-smoke-") as tmp:
             directory = Path(tmp)
+            if args.stage == 'recipe':
+                data, url = await web.get(SOURCE_SAMPLES['budgetbytes.com'], recipe_page=True)
+                recipe = extract_recipe(data.decode('utf-8', errors='replace'), url)
+                store = Store(directory / 'smoke.sqlite')
+                try:
+                    state = store.session(1)
+                    state['recipes'] = [recipe]
+                    with store.db:
+                        store.save(1, state)
+                    payload = {'kind': 'callback', 'data': f"h:{state['rev']}:pick:0"}
+                    class Model:
+                        calls = 0
+                        async def ask(self, *args, **kwargs):
+                            self.calls += 1
+                            for update in range(2, 12):
+                                assert store.ingest(update, 1, {**payload, 'callback_id': str(update)})
+                            return await luna.ask(*args, **kwargs)
+                    class Telegram:
+                        messages = []
+                        async def call(self, method, **payload):
+                            assert method == 'sendMessage', 'unexpected_telegram_operation'
+                            self.messages.append(payload['text'])
+                            return {'message_id': len(self.messages)}
+                    model, telegram = Model(), Telegram()
+                    # Use a temporary work directory; never send messages or touch user state.
+                    bot = Bot(replace(config, data_dir=directory), store, telegram, None, model, web)
+                    store.ingest(1, 1, payload)
+                    job = store.claim()
+                    await bot.handle(job)
+                    store.finish(job)
+                    assert store.claim() is None, 'duplicate_recipe_job'
+                    assert job['cache']['selected']['translation_status'] == 'translated', 'translation_fallback'
+                    text = '\n'.join(telegram.messages)
+                    assert '\n\n2. ' in text, 'missing_step_spacing'
+                    assert text.count('Источник: ') == 1, 'duplicate_recipe'
+                    report['recipe'] = {'clicks': 11, 'recipes_sent': 1, 'luna_calls': model.calls,
+                                        'step_spacing': 'ok', 'translation_status': 'translated'}
+                finally:
+                    store.close()
             if args.stage in {'sources', 'all'}:
                 report['sources'] = []
                 for domain, url in SOURCE_SAMPLES.items():
@@ -105,5 +147,5 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--secrets', type=Path, default=Path('/home/tony/Desktop/_code/config.json'))
-    parser.add_argument('--stage', choices=['vision', 'asr', 'sources', 'search', 'all'], default='all')
+    parser.add_argument('--stage', choices=['vision', 'asr', 'sources', 'search', 'recipe', 'all'], default='all')
     asyncio.run(run(parser.parse_args()))
