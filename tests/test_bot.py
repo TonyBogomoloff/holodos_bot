@@ -37,7 +37,7 @@ def test_photos_auto_merge_below_messages_and_retry_once(tmp_path):
                 self.calls += 1
                 assert len(data['inventory']) == self.calls - 1
                 assert len(kwargs['images']) == 1
-                return {'inventory': data['inventory'] + [
+                return {'inventory': data['inventory'] + data['inventory'] + [
                     {'name': str(self.calls), 'quantity': '', 'uncertain': False}],
                     'preferences': '', 'reply': 'Добавил.'}
         model = Model()
@@ -60,6 +60,12 @@ def test_photos_auto_merge_below_messages_and_retry_once(tmp_path):
         assert sum(method == 'sendMessage' for method, _ in telegram.sent) == 4
         assert all(payload.get('message_id') != 999 for _, payload in telegram.sent)
         assert 'Готово, распознать' not in str(telegram.sent)
+        assert 'Отменить правку' not in str(telegram.sent)
+        assert 'Добавить фото' not in str(telegram.sent)
+        second = [p for method, p in telegram.sent
+                  if method == 'editMessageText' and '<b>2</b>' in p.get('text', '')][0]
+        assert second['text'].startswith('<b>Твои продукты</b>\n• 1\n• <b>2</b>')
+        assert second['text'].count('• 1') == 1
     asyncio.run(run())
 
 
@@ -122,10 +128,15 @@ def test_voice_correction_applies_once_after_delivery_failure(tmp_path):
         assert store.session(1)['previous'][0][0]['name'] == 'молоко'
         sends = [payload for method, payload in telegram.sent if method == 'sendMessage']
         assert len(sends) == 2
-        assert sends[0]['text'] == 'Слушаю голосовое… 🎙'
-        assert 'Твои продукты:' in sends[1]['text']
+        assert sends[0]['text'] == 'Слушаю голосовое…'
+        assert sends[1]['text'].startswith('<b>Твои продукты</b>')
+        assert '<b>рис</b>' in sends[1]['text'] and '<s>молоко</s>' in sends[1]['text']
+        assert sends[1]['parse_mode'] == 'HTML'
+        assert 'Поправил.' not in sends[1]['text']
+        assert any(payload.get('entities') == [{'type': 'bold', 'offset': 0, 'length': 11}]
+                   for _, payload in telegram.sent)
         assert any(method == 'editMessageText' and payload['text'] ==
-                   'Ты сказал:\nУбери молоко, добавь рис' for method, payload in telegram.sent)
+                   'Расшифровка\nУбери молоко, добавь рис' for method, payload in telegram.sent)
     asyncio.run(run())
 
 
@@ -161,3 +172,19 @@ def test_recipe_click_burst_calls_luna_and_sends_recipe_once(tmp_path):
         assert '• 2 яйца' in text and state['recipes'][0]['url'] in text
         assert store.db.execute('SELECT used FROM quota WHERE owner=1').fetchone()[0] == 1
     asyncio.run(run())
+
+
+def test_inventory_diff_formats_changes_and_escapes_input():
+    from holodos_bot.bot import inventory_text
+    def item(name):
+        return {'name': name, 'quantity': '', 'uncertain': False}
+    state = {'inventory': [item('рис'), item('<сыр & молоко>')], 'photos': [],
+             'preferences': '', 'previous': [[item('рис'), item('хлеб')], '']}
+    text = inventory_text(state, changes=True)
+    assert text.startswith('<b>Твои продукты</b>\n• рис\n')
+    assert '<b>&lt;сыр &amp; молоко&gt;</b>' in text
+    assert '<s>хлеб</s>' in text
+    assert '<s>' not in inventory_text(state)
+    state['inventory'] = []
+    assert '<s>рис</s>' in inventory_text(state, changes=True)
+    assert 'Список пуст.' in inventory_text(state, changes=True)

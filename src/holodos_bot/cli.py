@@ -42,7 +42,7 @@ async def execute(args):
                 "Пришли фото холодильника — помогу разобрать продукты и найти, что приготовить. "
                 "Список можно поправить текстом или голосом. Рецепты — с фото и ссылками на источники.")
             await telegram.call("setMyShortDescription", short_description=
-                "Фото холодильника → продукты → идеи блюд 🍳")
+                "Фото холодильника → продукты → идеи блюд")
             if await telegram.call("getMyCommands") != COMMANDS:
                 raise ProviderError("telegram_menu_not_verified")
         if args.command in {"check", "configure"}:

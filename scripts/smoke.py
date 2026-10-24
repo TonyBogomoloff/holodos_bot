@@ -78,8 +78,8 @@ async def run(args):
                                for x in store.session(1)['inventory']), 'missing_rice'
                     sends = [p for method, p in telegram.messages if method == 'sendMessage']
                     assert len(sends) == 4, 'unexpected_delivery_order'
-                    assert sends[2]['text'] == 'Слушаю голосовое… 🎙'
-                    assert 'Твои продукты:' in sends[3]['text']
+                    assert sends[2]['text'] == 'Слушаю голосовое…'
+                    assert '<b>Твои продукты</b>' in sends[3]['text']
                     report['intake'] = {'auto_photos': 2, 'merged': True,
                                         'voice_transcript_before_result': True,
                                         'telegram_delivery': 'simulated'}

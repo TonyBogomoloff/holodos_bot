@@ -11,7 +11,7 @@ from .providers import ProviderError, prepare_image
 from .recipes import INVENTORY_PROMPT, INVENTORY_SCHEMA, RecipeSearch
 
 log = logging.getLogger(__name__)
-WELCOME = "Привет! Покажи, что у тебя в холодильнике, — подберу, что приготовить 🍳\n\n" \
+WELCOME = "Привет! Покажи, что у тебя в холодильнике, — подберу, что приготовить\n\n" \
           "Пришли одно или несколько фото. Можно и просто перечислить продукты — текстом или голосом."
 PRIVACY = "Фото и текст обрабатывает OpenAI, голос — Groq. Загруженные файлы удаляются после обработки, " \
           "список и правки — после суток бездействия. Резервные копии живут до суток. " \
@@ -51,29 +51,45 @@ def keyboard(state):
     if state["photos"]:
         rows.append([button("Повторить распознавание", "recognize")])
     elif state["inventory"]:
-        rows.append([button("🍳 Подобрать блюда", "search")])
-    if state.get("previous") is not None:
-        rows.append([button("Отменить правку", "undo")])
+        rows.append([button("Подобрать блюда", "search")])
     if state["inventory"] or state["photos"]:
-        rows.append([button("Добавить фото", "add"), button("Новый список", "new")])
+        rows.append([button("Новый список", "new")])
     return {"inline_keyboard": rows}
 
 
-def inventory_text(state, notice=""):
-    parts = [notice] if notice else []
-    if state["inventory"]:
-        parts.append("Твои продукты:")
-        for item in state["inventory"]:
+def inventory_text(state, notice="", changes=False):
+    previous = state.get("previous")
+    before = previous[0] if changes and previous is not None else []
+    def key(item):
+        return item["name"].strip().casefold()
+    old = {key(item): item for item in before}
+    current = {key(item) for item in state["inventory"]}
+    removed = [item for item in before if key(item) not in current]
+    parts = []
+    if state["inventory"] or removed or changes:
+        parts.append("<b>Твои продукты</b>")
+        def row(item):
             qty = f" — {item['quantity']}" if item["quantity"] else ""
-            parts.append(f"{'❓' if item['uncertain'] else '•'} {item['name']}{qty}")
+            uncertain = " (нужно уточнить)" if item["uncertain"] else ""
+            return html.escape(item["name"] + qty + uncertain)
+        for item in state["inventory"]:
+            value = row(item)
+            if changes and (key(item) not in old or old[key(item)] != item):
+                value = f"<b>{value}</b>"
+            parts.append("• " + value)
+        parts.extend("• <s>" + row(item) + "</s>" for item in removed)
+        if not state["inventory"]:
+            parts.append("Список пуст.")
         if any(x["uncertain"] for x in state["inventory"]):
-            parts.append("\nПункты с ❓ лучше уточнить — напиши или скажи голосом.")
+            parts.append("\nНеуверенно распознанные продукты лучше уточнить — напиши или скажи голосом.")
         parts.append("\nЧто-то поправить? Напиши или отправь голосовое.")
+    if notice:
+        parts.append(html.escape(notice))
     if state["photos"]:
         parts.append(f"\nФото: {len(state['photos'])}. Ожидают распознавания.")
     if state.get("preferences"):
-        parts.append("\nУчту: " + state["preferences"][:220])
-    return "\n".join(parts) or WELCOME
+        parts.append("\nУчту: " + html.escape(state["preferences"][:220]))
+    return "\n".join(parts) or html.escape(WELCOME)
 
 
 def chunks(text, size=3800):
@@ -114,30 +130,30 @@ class Bot:
         self.store.effect_set(key, "sent", result)
         return result
 
-    async def say(self, job, text, suffix="message", markup=None):
+    async def say(self, job, text, suffix="message", markup=None, html_mode=False):
         result = None
         pieces = list(chunks(text))
         for i, piece in enumerate(pieces):
             result = await self.effect(job, f"{suffix}:{i}", lambda p=piece, n=i: self.telegram.call(
-                "sendMessage", chat_id=job["owner"], text=p,
+                "sendMessage", chat_id=job["owner"], text=p, parse_mode="HTML" if html_mode else None,
                 reply_markup=markup if n == len(pieces) - 1 else None,
                 link_preview_options={"is_disabled": True}))
         return result
 
-    async def panel(self, job, state, text=None, markup=None):
+    async def panel(self, job, state, text=None, markup=None, html_mode=False):
+        html_mode = html_mode or text is None
         text, markup = text or inventory_text(state), markup if markup is not None else keyboard(state)
-        if len(text) > 4000:
-            # Product names/quantities are schema-bounded; preferences never displace product rows.
-            raise ProviderError("inventory_too_long")
-        if state.get("panel"):
+        # Diff views can contain both the old and new lists. Split at complete rows.
+        if state.get("panel") and len(text) <= 3800:
             try:
                 await self.telegram.call("editMessageText", chat_id=job["owner"], message_id=state["panel"],
-                    text=text, reply_markup=markup, link_preview_options={"is_disabled": True})
+                    text=text, reply_markup=markup, parse_mode="HTML" if html_mode else None,
+                    link_preview_options={"is_disabled": True})
                 return
             except ProviderError as e:
                 if str(e) != "telegram_edit_missing":
                     raise
-        result = await self.say(job, text, "panel", markup)
+        result = await self.say(job, text, "panel", markup, html_mode=html_mode)
         state["panel"] = result["message_id"]
         with self.store.db:
             self.store.save(job["owner"], state)
@@ -147,12 +163,12 @@ class Bot:
             self.store.checkpoint(job, key, await operation())
         return job["cache"][key]
 
-    def apply(self, job, state, view="inventory", notice=""):
-        self.store.checkpoint(job, "applied", {"view": view, "notice": notice}, state=state)
+    def apply(self, job, state, view="inventory", notice="", changes=False):
+        self.store.checkpoint(job, "applied", {"view": view, "notice": notice, "changes": changes}, state=state)
 
     async def limit(self, job):
         if not self.store.reserve(job, self.config.daily_actions_per_user, self.config.daily_actions_total):
-            await self.say(job, "На сегодня лимит обработки закончился. Возвращайся завтра 🙂", "quota")
+            await self.say(job, "На сегодня лимит обработки закончился. Возвращайся завтра", "quota")
             return False
         return True
 
@@ -166,7 +182,7 @@ class Bot:
                 match = re.fullmatch(r"h:(\d+):(recognize|search|shop|undo|add|new|list|pick|choices)(?::(\d+))?",
                                      p["data"])
                 if not match or int(match[1]) != state["rev"]:
-                    await self.say(job, "Этот список уже изменился. Вот актуальный 👇", "stale")
+                    await self.say(job, "Этот список уже изменился. Вот актуальный", "stale")
                     await self.panel(job, state)
                     return
                 action = match[2]
@@ -190,7 +206,7 @@ class Bot:
                         if not inventory:
                             self.apply(job, state, notice="Сначала добавь или уточни продукты.")
                         elif await self.limit(job):
-                            await self.panel(job, state, "Ищу блюда по твоим продуктам… 🍳",
+                            await self.panel(job, state, "Ищу блюда по твоим продуктам…",
                                              {"inline_keyboard": []})
                             found = await self.cached(job, "recipes", lambda: self.recipes.search(
                                 inventory, state["preferences"], directory, action == "shop"))
@@ -203,9 +219,9 @@ class Bot:
                     if state["photos"]:
                         if not await self.limit(job):
                             return
-                        await self.panel(job, state, "Рассматриваю фотографии… 👀", {"inline_keyboard": []})
-                        result = await self.recognize(job, state, directory)
-                        self.apply(job, state, notice=result["reply"])
+                        await self.panel(job, state, "Рассматриваю фотографии…", {"inline_keyboard": []})
+                        await self.recognize(job, state, directory)
+                        self.apply(job, state, changes=True)
                     else:
                         self.apply(job, state)
                 elif action == "undo":
@@ -216,7 +232,7 @@ class Bot:
                     self.apply(job, state, notice="Вернул предыдущий список.")
                 elif action == "new":
                     state = self.reset(state)
-                    self.apply(job, state, notice="Начнём заново. Пришли фото или перечисли продукты 🙂")
+                    self.apply(job, state, notice="Начнём заново. Пришли фото или перечисли продукты")
                 elif action == "add":
                     self.apply(job, state, notice="Пришли ещё фото сюда — можно несколько сразу.")
                 else:
@@ -224,15 +240,15 @@ class Bot:
             elif p["kind"] == "photo":
                 # Each photo gets a new panel below the incoming message. Keep its ID
                 # in the job so a retry edits the same progress message.
-                result = await self.say(job, "Рассматриваю фото… 👀", "photo_progress",
+                result = await self.say(job, "Рассматриваю фото…", "photo_progress",
                                         {"inline_keyboard": []})
                 state["panel"] = result["message_id"]
                 with self.store.db:
                     self.store.save(job["owner"], state)
                 if p["unique"] in state.get("recognized_photos", []):
-                    self.apply(job, state, notice="Это фото уже учтено 🙂")
+                    self.apply(job, state, notice="Это фото уже учтено")
                 elif not await self.limit(job):
-                    await self.panel(job, state, inventory_text(state, "На сегодня лимит обработки закончился."))
+                    await self.panel(job, state, inventory_text(state, "На сегодня лимит обработки закончился."), html_mode=True)
                     return
                 else:
                     if not any(x["unique"] == p["unique"] for x in state["photos"]):
@@ -240,8 +256,8 @@ class Bot:
                         state["rev"] += 1
                     with self.store.db:
                         self.store.save(job["owner"], state)
-                    result = await self.recognize(job, state, directory)
-                    self.apply(job, state, notice=result["reply"])
+                    await self.recognize(job, state, directory)
+                    self.apply(job, state, changes=True)
             else:
                 text = p.get("text", "").strip()
                 command = text.split(maxsplit=1)[0].split("@")[0].lower() if text.startswith("/") else ""
@@ -270,7 +286,7 @@ class Bot:
                     for identity in ids:
                         shutil.rmtree(self.work / str(identity), ignore_errors=True)
                     self.store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                    await self.say(job, "Удалил список и сохранённые правки. Можно начать заново 🙂")
+                    await self.say(job, "Удалил список и сохранённые правки. Можно начать заново")
                     return
                 elif command:
                     await self.say(job, "Пришли фото или список продуктов. /help — короткая подсказка.")
@@ -278,25 +294,26 @@ class Bot:
                 else:
                     if p["kind"] == "voice":
                         if p.get("duration", 0) > 180:
-                            await self.say(job, "Пришли голосовое покороче — до трёх минут 🙂")
+                            await self.say(job, "Пришли голосовое покороче — до трёх минут")
                             return
                         if not await self.limit(job):
                             return
-                        progress = await self.say(job, "Слушаю голосовое… 🎙", "voice_progress",
+                        progress = await self.say(job, "Слушаю голосовое…", "voice_progress",
                                                   {"inline_keyboard": []})
                         audio = directory / "voice.ogg"
                         if "transcript" not in job["cache"]:
                             await self.telegram.download(p["file_id"], audio, 8_000_000)
                         text = await self.cached(job, "transcript", lambda: self.groq.transcribe(audio))
-                        transcript_parts = list(chunks("Ты сказал:\n" + text))
+                        transcript_parts = list(chunks("Расшифровка\n" + text))
                         await self.telegram.call("editMessageText", chat_id=job["owner"],
                             message_id=progress["message_id"], text=transcript_parts[0],
+                            entities=[{"type": "bold", "offset": 0, "length": len("Расшифровка")}],
                             reply_markup={"inline_keyboard": []})
                         if len(transcript_parts) > 1:
                             await self.say(job, "\n".join(transcript_parts[1:]), "transcript_rest")
                         state["panel"] = None
                     if not text:
-                        await self.say(job, "Не разобрал. Попробуй ещё раз или напиши текстом 🙂")
+                        await self.say(job, "Не разобрал. Попробуй ещё раз или напиши текстом")
                         await self.panel(job, state)
                         return
                     if not await self.limit(job):
@@ -305,8 +322,8 @@ class Bot:
                         INVENTORY_PROMPT, INVENTORY_SCHEMA,
                         {"inventory": state["inventory"], "preferences": state["preferences"], "correction": text}))
                     self.update_inventory(state, result)
-                    notice = result["reply"]
-                    self.apply(job, state, notice=notice)
+                    state["panel"] = None
+                    self.apply(job, state, changes=True)
         applied = job["cache"]["applied"]
         # State and applied checkpoint are committed together; retries never apply a correction twice.
         state = self.store.session(job["owner"])
@@ -320,7 +337,8 @@ class Bot:
         elif applied["view"] == "recipe":
             await self.show_recipe(job, state)
         else:
-            await self.panel(job, state, inventory_text(state, applied["notice"]))
+            await self.panel(job, state, inventory_text(state, applied["notice"],
+                                                       applied.get("changes", False)), html_mode=True)
 
     async def recognize(self, job, state, directory):
         if "inventory" not in job["cache"]:
@@ -335,6 +353,11 @@ class Bot:
                 {"inventory": state["inventory"], "preferences": state["preferences"],
                  "captions": [x["caption"] for x in state["photos"]]}, images=images))
         result = job["cache"]["inventory"]
+        # A new angle adds products; absence from this photo never removes old ones.
+        merged = {" ".join(item["name"].casefold().split()): item for item in state["inventory"]}
+        for item in result["inventory"]:
+            merged[" ".join(item["name"].casefold().split())] = item
+        result = {**result, "inventory": list(merged.values())}
         self.update_inventory(state, result)
         state["recognized_photos"] = (
             state.get("recognized_photos", []) + [x["unique"] for x in state["photos"]])[-300:]
@@ -368,7 +391,7 @@ class Bot:
                 pictures.append((Path(r["picture"]), caption))
                 rows.append([{"text": f"{i + 1}. {r['title_ru']}"[:64], "callback_data": f"h:{rev}:pick:{i}"}])
             await self.effect(job, "album", lambda: self.telegram.album(job["owner"], pictures))
-            text = f"Нашёл {len(found)} блюд. Что приготовим? 🍽"
+            text = f"Нашёл {len(found)} блюд. Что приготовим?"
         else:
             text = "Пока не нашёл подходящих рецептов с фото. Добавь продукты или разреши небольшую докупку."
         if len(found) < 5:
@@ -422,7 +445,7 @@ class Bot:
                             self.busy_notices = {k: v for k, v in self.busy_notices.items() if time.time() - v < 60}
                         self.busy_notices[owner] = time.time()
                         await self.telegram.call("sendMessage", chat_id=owner,
-                            text="Сначала разберу предыдущие сообщения. Это пришли чуть позже 🙂")
+                            text="Сначала разберу предыдущие сообщения. Это пришли чуть позже")
                     if payload and payload["kind"] == "callback":
                         try:
                             await self.telegram.call("answerCallbackQuery", callback_query_id=payload["callback_id"])
@@ -451,7 +474,7 @@ class Bot:
                     retry = e.retry_after
                 else:
                     try:
-                        await self.say(job, "Не получилось закончить. Твой список сохранён — попробуй ещё раз 🙂",
+                        await self.say(job, "Не получилось закончить. Твой список сохранён — попробуй ещё раз",
                                        "failure")
                         await self.panel(job, self.store.session(job["owner"]))
                     except ProviderError:
