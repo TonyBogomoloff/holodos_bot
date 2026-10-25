@@ -86,7 +86,7 @@ def inventory_text(state, notice="", changes=False):
             parts.append("Список пуст.")
         if any(x["uncertain"] for x in state["inventory"]):
             parts.append("\nНеуверенно распознанные продукты лучше уточнить — напиши или скажи голосом.")
-        parts.append("\nЧто-то поправить? Напиши или отправь голосовое.")
+        parts.append("\nЧто-то поправить? Напиши, отправь голосовое или фотографию.")
     if notice:
         parts.append(html.escape(notice))
     if state["photos"]:
