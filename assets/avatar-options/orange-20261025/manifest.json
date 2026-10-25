@@ -1,0 +1,14 @@
+{
+  "variant_count": 5,
+  "files": {
+    "01-tangerine-gloss.png": "89504d3c783bff978ed65c65b88b698a1a48c1b16a6e2139e83339f8c2066764",
+    "02-cream-orange.png": "6a44c778518ac86f316d32119b2e21b7609a52116770255cf8d22d522e3ff88b",
+    "03-apricot-clay.png": "705b57d365011aed20badc544afde8c5d0d5cedfa4c3093b17793b2e7cefa0e7",
+    "04-honey-amber.png": "f3c0e5945029490093d930b8869d91f58063bd2b5a5cb72de4d425817e4ed5f3",
+    "05-orange-ceramic.png": "0908481d3f8fc56a47cf642b53572f736bfecc6769bac90d7aca512ade032622",
+    "README.md": "3a75b952fe1bc372b5399dc755a92b771c33b71261471cb33461274c4f538099",
+    "index.html": "12921605fdb797182fced8dc5f3bd0e2d139d35ebceda1538cb545fcc9226df1",
+    "prompts.json": "bcf05431693648a7b223bb2c1b0b09aedf311fb3fc486186891c203a7573227c",
+    "references/current-avatar.png": "0fbe95e5e66870bdd92614a4b708fa4c44e08bc6daa73fb6e4bd208124516fc0"
+  }
+}
