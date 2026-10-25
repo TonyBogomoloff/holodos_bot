@@ -422,7 +422,7 @@ def test_day_paging_edits_clicked_message_and_all_views_have_footer(tmp_path):
             if action == 'home':
                 assert [b['text'] for row in rows for b in row] == ['Из холодильника', 'План питания']
             else:
-                assert [b['text'] for b in rows[-1]] == ['Назад', 'Главное меню']
+                assert [b['text'] for b in rows[-1]] == ['⬅️', '🏠']
             if action.startswith('page:'):
                 assert method == 'editMessageText' and message['message_id'] == 321
                 assert message['text'].startswith('День 2' if action == 'page:1' else 'День 1')
