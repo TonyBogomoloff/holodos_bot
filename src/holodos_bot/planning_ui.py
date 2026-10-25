@@ -71,7 +71,7 @@ class PlanningUI:
 
     def enter(self, job, state, edit=False):
         state.pop('refine_position', None)
-        state['mode'], state['panel'] = 'plan', None
+        state['mode'] = 'plan'
         if edit or (not state.get('profile') and state.get('profile_draft') is None):
             state['profile_draft'] = dict(state.get('profile') or {})
         state['rev'] += 1
@@ -160,7 +160,7 @@ class PlanningUI:
                 await bot.say(job, text, 'plan_unavailable')
                 bot.apply(job, state, 'planning')
                 return True
-            state['meal_plan'], state['plan_day'], state['panel'] = plan, 0, None
+            state['meal_plan'], state['plan_day'] = plan, 0
             state['rev'] += 1
             bot.apply(job, state, 'plan_day')
         elif action in {'slot', 'alternatives', 'replace', 'refine'}:
@@ -203,8 +203,6 @@ class PlanningUI:
             elif action in {'day', 'page'}:
                 day = int(argument or 0)
                 if 0 <= day < plan['days']:
-                    if action == 'page':
-                        bot.store.checkpoint(job, 'day_message', job['payload'].get('message_id') or state.get('panel'))
                     state['plan_day'] = day
                     bot.apply(job, state, 'plan_day')
             else:
@@ -331,17 +329,7 @@ class PlanningUI:
                 if plan:
                     rows.insert(0, [('Моё меню', 'day:0'), ('Что докупить', 'shopping')])
             rows.append([('Мои продукты', 'list')])
-        if view == 'plan_day' and job['cache'].get('day_message'):
-            state['panel'] = job['cache']['day_message']
-            await self.bot.panel(job, state, text, markup(state, rows, back))
-            with self.bot.store.db:
-                self.bot.store.save(job["owner"], state)
-            return
-        # Send below the user's last action and pack long shopping lists safely as plain text.
-        result = await self.bot.say(job, text, f'planning:{view}', markup(state, rows, back))
-        state['panel'] = result['message_id']
-        with self.bot.store.db:
-            self.bot.store.save(job['owner'], state)
+        await self.bot.panel(job, state, text, markup(state, rows, back))
 
     async def photo(self, job, recipe):
         async def send():

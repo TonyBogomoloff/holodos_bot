@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import html
 import json
 import logging
@@ -135,36 +136,85 @@ class Bot:
         self.store.effect_set(key, "sent", result)
         return result
 
-    async def say(self, job, text, suffix="message", markup=None, html_mode=False):
+    async def edit_panel(self, job, **payload):
+        key = "edit:" + hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+        if key not in job["cache"]:
+            await self.telegram.call("editMessageText", **payload)
+            self.store.checkpoint(job, key, True)
+
+    async def say(self, job, text, suffix="message", markup=None, html_mode=False, fresh=False):
         result = None
         if markup is None:
             state = self.store.session(job["owner"])
             markup = footer(state, [], "plan" if state.get("mode") == "plan" else "list")
         pieces = list(chunks(text))
+        if len(pieces) > 1 and job["payload"]["kind"] == "callback" and not fresh:
+            return await self.panel(job, self.store.session(job["owner"]), text, markup, html_mode)
+        # Button navigation stays in the active panel, including notices and progress.
+        if job["payload"]["kind"] == "callback" and not fresh and len(pieces) == 1:
+            state = self.store.session(job["owner"])
+            target = state.get("panel") or job["payload"].get("message_id")
+            if target:
+                try:
+                    await self.edit_panel(job, chat_id=job["owner"], message_id=target,
+                        text=text, parse_mode="HTML" if html_mode else None, reply_markup=markup,
+                        link_preview_options={"is_disabled": True})
+                    state["panel"] = target
+                    with self.store.db:
+                        self.store.save(job["owner"], state)
+                    return {"message_id": target}
+                except ProviderError as error:
+                    if str(error) != "telegram_edit_missing":
+                        raise
         for i, piece in enumerate(pieces):
             result = await self.effect(job, f"{suffix}:{i}", lambda p=piece, n=i: self.telegram.call(
                 "sendMessage", chat_id=job["owner"], text=p, parse_mode="HTML" if html_mode else None,
                 reply_markup=markup if n == len(pieces) - 1 else None,
                 link_preview_options={"is_disabled": True}))
+        state = self.store.session(job["owner"])
+        state["panel"] = result["message_id"]
+        with self.store.db:
+            self.store.save(job["owner"], state)
         return result
 
     async def panel(self, job, state, text=None, markup=None, html_mode=False):
         html_mode = html_mode or text is None
         text, markup = text or inventory_text(state), markup if markup is not None else keyboard(state)
-        # Diff views can contain both the old and new lists. Split at complete rows.
+        if job["payload"]["kind"] == "callback" and not state.get("panel"):
+            state["panel"] = self.store.session(job["owner"]).get("panel") or job["payload"].get("message_id")
+        if len(text) > 3800:
+            state["screen_pages"] = {"texts": list(chunks(text, 3400)), "markup": markup, "html": html_mode}
+            with self.store.db:
+                self.store.save(job["owner"], state)
+            return await self.screen_page(job, state, 0)
         if state.get("panel") and len(text) <= 3800:
             try:
-                await self.telegram.call("editMessageText", chat_id=job["owner"], message_id=state["panel"],
+                await self.edit_panel(job, chat_id=job["owner"], message_id=state["panel"],
                     text=text, reply_markup=markup, parse_mode="HTML" if html_mode else None,
                     link_preview_options={"is_disabled": True})
-                return
+                with self.store.db:
+                    self.store.save(job["owner"], state)
+                return {"message_id": state["panel"]}
             except ProviderError as e:
                 if str(e) != "telegram_edit_missing":
                     raise
-        result = await self.say(job, text, "panel", markup, html_mode=html_mode)
+        result = await self.say(job, text, "panel", markup, html_mode=html_mode, fresh=True)
         state["panel"] = result["message_id"]
         with self.store.db:
             self.store.save(job["owner"], state)
+        return result
+
+    async def screen_page(self, job, state, index):
+        pages = state.get("screen_pages")
+        if not pages or not 0 <= index < len(pages["texts"]):
+            return
+        nav = []
+        for label, target in (("←", index - 1), ("→", index + 1)):
+            if 0 <= target < len(pages["texts"]):
+                nav.append({"text": label, "callback_data": f"h:{state['rev']}:screen:{target}"})
+        markup = {"inline_keyboard": [nav, *pages["markup"]["inline_keyboard"]]}
+        text = f"{index + 1}/{len(pages['texts'])}\n\n" + pages["texts"][index]
+        return await self.panel(job, state, text, markup, html_mode=pages.get("html", False))
 
     async def cached(self, job, key, operation):
         if key not in job["cache"]:
@@ -212,13 +262,20 @@ class Bot:
 
     async def handle(self, job):
         state = self.store.session(job["owner"])
+        if not job["cache"].get("navigation_started"):
+            # Only incoming user content starts a new panel. Persist once for retries.
+            if job["payload"]["kind"] != "callback":
+                state["panel"] = None
+            elif not state.get("panel"):
+                state["panel"] = job["payload"].get("message_id")
+            self.store.checkpoint(job, "navigation_started", True, state=state)
         directory = self.work / str(job["id"])
         directory.mkdir(exist_ok=True, mode=0o700)
         if not job["cache"].get("applied"):
             p = job["payload"]
             if p["kind"] == "callback":
                 match = re.fullmatch(r"h:(\d+):(recognize|search|shop|undo|add|new|list|pick|choices|"
-                                     r"help|privacy|delete|home|plan|profile|profileback|saveprofile|build|shopping|day|page|meal|slot|alternatives|replace|refine)(?::(\d+))?(?::(\d+))?",
+                                     r"screen|help|privacy|delete|home|plan|profile|profileback|saveprofile|build|shopping|day|page|meal|slot|alternatives|replace|refine)(?::(\d+))?(?::(\d+))?",
                                      p["data"])
                 if not match or (match[4] is not None and match[2] != "replace") or int(match[1]) != state["rev"]:
                     await self.say(job, "Этот список уже изменился. Вот актуальный", "stale")
@@ -228,6 +285,9 @@ class Bot:
                         await self.panel(job, state)
                     return
                 action = match[2]
+                if action == "screen":
+                    await self.screen_page(job, state, int(match[3] or 0))
+                    return
                 if action != "new":
                     state.pop("new_list_pending", None)
                 if action in {"help", "privacy", "delete"}:
@@ -537,34 +597,20 @@ class Bot:
         # Pack complete escaped lines so tags and HTML entities never cross messages.
         pieces, piece = [], ""
         for line in parts:
-            if piece and len(piece) + len(line) + 1 > 3800:
+            if piece and len(piece) + len(line) + 1 > 3400:
                 pieces.append(piece)
                 piece = ""
             piece += ("\n" if piece else "") + line
         if piece:
             pieces.append(piece)
-        message_id = job["cache"].get("recipe_panel")
-        if message_id:
-            try:
-                await self.telegram.call("editMessageText", chat_id=job["owner"], message_id=message_id,
-                    text=pieces[0], parse_mode="HTML",
-                    reply_markup=markup if len(pieces) == 1 else {"inline_keyboard": []},
-                    link_preview_options={"is_disabled": True})
-            except ProviderError as e:
-                if str(e) != "telegram_edit_missing":
-                    raise
-                message_id = None
-        if not message_id:
-            result = await self.say(job, pieces[0], "recipe", markup if len(pieces) == 1 else None,
-                                    html_mode=True)
-            message_id = result["message_id"]
-        for i, piece in enumerate(pieces[1:], 1):
-            result = await self.say(job, piece, f"recipe_continued:{i}",
-                                    markup if i == len(pieces) - 1 else None, html_mode=True)
-            message_id = result["message_id"]
-        state["panel"] = message_id
-        with self.store.db:
-            self.store.save(job["owner"], state)
+        state["panel"] = job["cache"].get("recipe_panel") or state.get("panel")
+        if len(pieces) > 1:
+            state["screen_pages"] = {"texts": pieces, "markup": markup, "html": True}
+            with self.store.db:
+                self.store.save(job["owner"], state)
+            await self.screen_page(job, state, 0)
+        else:
+            await self.panel(job, state, pieces[0], markup, html_mode=True)
 
     async def poll(self):
         while not self.stop.is_set():

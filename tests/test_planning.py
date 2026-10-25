@@ -406,7 +406,7 @@ def test_day_paging_edits_clicked_message_and_all_views_have_footer(tmp_path):
         plan = await generate(tmp_path, inventory=[])
         store, telegram = Store(tmp_path / 'navigation.sqlite'), Telegram()
         state = store.session(1)
-        state.update(profile=PROFILE, meal_plan=plan, mode='plan', panel=999)
+        state.update(profile=PROFILE, meal_plan=plan, mode='plan', panel=321)
         with store.db:
             store.save(1, state)
         bot = Bot(Config('dummy:token', 'key', tmp_path), store, telegram, None, Model(), Web())
@@ -423,6 +423,8 @@ def test_day_paging_edits_clicked_message_and_all_views_have_footer(tmp_path):
                 assert [b['text'] for row in rows for b in row] == ['Из холодильника', 'План питания']
             else:
                 assert [b['text'] for b in rows[-1]] == ['⬅️', '🏠']
+            assert method == 'editMessageText' and message['message_id'] == 321
+            assert not any(m == 'sendMessage' for m, _ in telegram.sent)
             if action.startswith('page:'):
                 assert method == 'editMessageText' and message['message_id'] == 321
                 assert message['text'].startswith('День 2' if action == 'page:1' else 'День 1')

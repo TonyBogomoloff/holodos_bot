@@ -181,7 +181,7 @@ def test_recipe_click_burst_calls_luna_and_sends_recipe_once(tmp_path):
         choices_job = store.claim()
         await bot.handle(choices_job)
         store.finish(choices_job)
-        assert telegram.sent[-1][0] == 'sendMessage'
+        assert telegram.sent[-1][0] == 'editMessageText'
         assert telegram.sent[-1][1]['reply_markup']['inline_keyboard'][0][0]['text'] == '1. Eggs'
         assert model.calls == 1
         store.ingest(13, 1, payload)
@@ -312,4 +312,54 @@ def test_help_privacy_delete_navigation_and_menu(tmp_path):
         assert store.session(2)['profile'] == PROFILE
         assert store.session(2)['inventory']
     assert not {'privacy', 'delete'} & {c['command'] for c in COMMANDS}
+    asyncio.run(run())
+
+
+def test_navigation_reuses_panel_until_user_message_and_handles_missing_panel(tmp_path):
+    async def run():
+        store, telegram = Store(tmp_path / 'navigation.sqlite'), Telegram()
+        bot = Bot(Config('dummy:token', 'key', tmp_path), store, telegram, None, None, None)
+        seq = 0
+        async def dispatch(action):
+            nonlocal seq
+            seq += 1
+            payload = {'kind': 'text', 'text': action} if action.startswith('/') else {
+                'kind': 'callback', 'data': f"h:{store.session(1)['rev']}:{action}",
+                'message_id': store.session(1)['panel']}
+            store.ingest(seq, 1, payload)
+            job = store.claim()
+            await bot.handle(job)
+            store.finish(job)
+            return job
+        await dispatch('/start')
+        first = store.session(1)['panel']
+        for action in ['list', 'home', 'plan', 'profile', 'profileback', 'help', 'privacy', 'help', 'new', 'list']:
+            await dispatch(action)
+            assert store.session(1)['panel'] == first
+            assert telegram.sent[-1][0] == 'editMessageText'
+        assert sum(m == 'sendMessage' for m, _ in telegram.sent) == 1
+        await dispatch('/new')
+        second = store.session(1)['panel']
+        assert second != first
+        job = await dispatch('home')
+        assert telegram.sent[-1][1]['message_id'] == second
+        # Long menus page in place and keep every row accessible.
+        text = '\n'.join(f'Продукт {i}: ' + 'x' * 60 for i in range(100))
+        await bot.panel(job, store.session(1), text, {'inline_keyboard': []})
+        pages = store.session(1)['screen_pages']['texts']
+        assert '\n'.join(pages) == text
+        await dispatch('screen:1')
+        assert telegram.sent[-1][1]['message_id'] == second
+        assert pages[1] in telegram.sent[-1][1]['text']
+        assert sum(m == 'sendMessage' for m, _ in telegram.sent) == 2
+        original = telegram.call
+        async def missing(method, **payload):
+            if method == 'editMessageText':
+                raise ProviderError('telegram_edit_missing')
+            return await original(method, **payload)
+        telegram.call = missing
+        await dispatch('home')
+        assert telegram.sent[-1][0] == 'sendMessage'
+        assert store.session(1)['panel'] != second
+        store.close()
     asyncio.run(run())
