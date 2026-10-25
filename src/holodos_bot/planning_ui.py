@@ -229,7 +229,8 @@ class PlanningUI:
         if view == 'home':
             await self.bot.panel(job, state,
                 'Что приготовим?\n\nМогу подобрать блюда из твоих продуктов или составить меню и список покупок.',
-                markup(state, [[('Из холодильника', 'list')], [('План питания', 'plan')]]))
+                {"inline_keyboard": [[button(state, "Из холодильника", "list")],
+                                     [button(state, "План питания", "plan")]]})
             return
         plan = state.get('meal_plan')
         back = 'home'
