@@ -58,7 +58,6 @@ def keyboard(state):
         rows.append([button("Подобрать блюда", "search")])
     if state["inventory"] or state["photos"]:
         rows.append([button("Новый список", "new")])
-    rows.append([button("План питания", "plan")])
     return footer(state, rows)
 
 
