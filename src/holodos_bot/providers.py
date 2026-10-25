@@ -10,6 +10,8 @@ import httpx
 import jsonschema
 from PIL import Image, ImageOps
 
+from .button_icons import decorate
+
 
 class ProviderError(Exception):
     def __init__(self, code, retry_after=0):
@@ -22,17 +24,30 @@ class Telegram:
         self.base = f"https://api.telegram.org/bot{token}/"
         self.files = f"https://api.telegram.org/file/bot{token}/"
         self.client = client or httpx.AsyncClient(timeout=httpx.Timeout(65, connect=10), trust_env=False)
+        self.button_icons_enabled = True
 
     async def close(self):
         await self.client.aclose()
 
     async def call(self, method, **payload):
+        markup = payload.get('reply_markup')
+        if isinstance(markup, dict):
+            payload['reply_markup'] = decorate(markup, self.button_icons_enabled)
         try:
             response = await self.client.post(self.base + method,
                                               json={k: v for k, v in payload.items() if v is not None})
             data = response.json()
         except (httpx.HTTPError, ValueError):
             raise ProviderError("telegram_transport_unknown") from None
+        # Retry only an explicit rejection of emoji, never an ambiguous transport failure.
+        description = str(data.get('description', '')).lower() if isinstance(data, dict) else ''
+        has_icons = any(b.get('icon_custom_emoji_id') for row in
+                        (payload.get('reply_markup') or {}).get('inline_keyboard', []) for b in row)
+        if (response.status_code == 400 and has_icons and not data.get('ok')
+                and any(word in description for word in ('emoji', 'premium', 'button_icon'))):
+            self.button_icons_enabled = False
+            payload['reply_markup'] = decorate(markup, False)
+            return await self.call(method, **payload)
         return self.result(data, response.status_code)
 
     @staticmethod
