@@ -377,8 +377,7 @@ class Bot:
         state = self.store.session(job["owner"])
         if applied['view'] == 'new_list':
             await self.panel(job, state,
-                'Пришли новый список текстом, голосом или фото. Старые продукты заменю только после обработки. '
-                '⬅️ или 🏠 — отменить.', footer(state, [], 'list'))
+                'Пришли новый список текстом, голосом или фото.', footer(state, [], 'list'))
         elif applied['view'] in {'home', 'planning', 'shopping', 'plan_day', 'plan_slot', 'plan_alternatives', 'plan_refine'}:
             await self.planning.show(job, state, applied['view'])
         elif applied["view"] == "results":
