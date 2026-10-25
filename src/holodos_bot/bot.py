@@ -7,6 +7,7 @@ import shutil
 import time
 from pathlib import Path
 
+from .navigation import footer
 from .planning import amount, multiplier, number, quantity
 from .planning_ui import PlanningUI, nutrition_text
 from .providers import ProviderError, prepare_image
@@ -31,7 +32,7 @@ def normalize_update(update, allowed=()):
         return None, None
     if callback:
         data = callback.get("data", "")
-        return owner, {"kind": "callback", "data": data[:64], "callback_id": callback.get("id", "")}
+        return owner, {"kind": "callback", "data": data[:64], "callback_id": callback.get("id", ""), "message_id": message.get("message_id")}
     if message.get("photo"):
         photo = message["photo"][-1]
         return owner, {"kind": "photo", "file_id": photo["file_id"], "unique": photo["file_unique_id"],
@@ -57,8 +58,8 @@ def keyboard(state):
         rows.append([button("Подобрать блюда", "search")])
     if state["inventory"] or state["photos"]:
         rows.append([button("Новый список", "new")])
-    rows.append([button("План питания", "plan"), button("Главное меню", "home")])
-    return {"inline_keyboard": rows}
+    rows.append([button("План питания", "plan")])
+    return footer(state, rows)
 
 
 def inventory_text(state, notice="", changes=False):
@@ -137,6 +138,9 @@ class Bot:
 
     async def say(self, job, text, suffix="message", markup=None, html_mode=False):
         result = None
+        if markup is None:
+            state = self.store.session(job["owner"])
+            markup = footer(state, [], "plan" if state.get("mode") == "plan" else "list")
         pieces = list(chunks(text))
         for i, piece in enumerate(pieces):
             result = await self.effect(job, f"{suffix}:{i}", lambda p=piece, n=i: self.telegram.call(
@@ -185,7 +189,7 @@ class Bot:
             p = job["payload"]
             if p["kind"] == "callback":
                 match = re.fullmatch(r"h:(\d+):(recognize|search|shop|undo|add|new|list|pick|choices|"
-                                     r"home|plan|profile|saveprofile|build|shopping|day|meal|slot|alternatives|replace|refine)(?::(\d+))?(?::(\d+))?",
+                                     r"home|plan|profile|profileback|saveprofile|build|shopping|day|page|meal|slot|alternatives|replace|refine)(?::(\d+))?(?::(\d+))?",
                                      p["data"])
                 if not match or (match[4] is not None and match[2] != "replace") or int(match[1]) != state["rev"]:
                     await self.say(job, "Этот список уже изменился. Вот актуальный", "stale")
@@ -365,9 +369,8 @@ class Bot:
         elif applied["view"] == "choices":
             rows = [[{"text": f"{i + 1}. {r.get('title_ru', r['title'])}"[:64],
                       "callback_data": f"h:{state['rev']}:pick:{i}"}] for i, r in enumerate(state["recipes"])]
-            rows.append([{"text": "Мои продукты", "callback_data": f"h:{state['rev']}:list"}])
             result = await self.say(job, f"Подходящие блюда: {len(state['recipes'])}. Что приготовим?",
-                                    "saved_choices", {"inline_keyboard": rows})
+                                    "saved_choices", footer(state, rows, "list"))
             state["panel"] = result["message_id"]
             with self.store.db:
                 self.store.save(job["owner"], state)
@@ -434,9 +437,8 @@ class Bot:
             text = "Пока не нашёл подходящих рецептов с фото. Добавь продукты или разреши небольшую докупку."
         if len(found) < 5:
             rows.append([{"text": "Можно докупить 1–2 продукта", "callback_data": f"h:{rev}:shop"}])
-        rows.append([{"text": "Мои продукты", "callback_data": f"h:{rev}:list"}])
         # Put selection below the album; an old progress panel above it is no longer interactive.
-        result = await self.say(job, text, "choices", {"inline_keyboard": rows})
+        result = await self.say(job, text, "choices", footer(state, rows, "list"))
         state["panel"] = result["message_id"]
         with self.store.db:
             self.store.save(job["owner"], state)
@@ -489,12 +491,11 @@ class Bot:
             parts.append("<b>Докупить:</b>")
             parts.extend(lines(", ".join(r["missing"])))
         parts.extend(["", "<i>Сверь количество продуктов перед готовкой.</i>"])
-        markup = {"inline_keyboard": [[{"text": "Другие блюда", "callback_data": f"h:{state['rev']}:choices"},
-                                        {"text": "Мои продукты", "callback_data": f"h:{state['rev']}:list"}]]}
+        markup = footer(state, [], 'choices')
         if r.get('plan_people'):
-            markup = {'inline_keyboard': [[
-                {'text': 'К меню', 'callback_data': f"h:{state['rev']}:day:{state.get('plan_day', 0)}"},
-                {'text': 'Покупки', 'callback_data': f"h:{state['rev']}:shopping"}]]}
+            position = state.get('plan_slot', state.get('plan_day', 0) * len(state['meal_plan']['labels']))
+            markup = footer(state, [[{'text': 'Что докупить',
+                'callback_data': f"h:{state['rev']}:shopping"}]], f'slot:{position}')
         # Pack complete escaped lines so tags and HTML entities never cross messages.
         pieces, piece = [], ""
         for line in parts:

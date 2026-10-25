@@ -1,6 +1,7 @@
 """Telegram views for the persistent profile and meal planner."""
 import html
 
+from .navigation import footer
 from .planning import (
     PROFILE_PROMPT,
     PROFILE_SCHEMA,
@@ -25,8 +26,8 @@ def button(state, text, action):
     return {"text": text, "callback_data": f"h:{state['rev']}:{action}"}
 
 
-def markup(state, rows):
-    return {"inline_keyboard": [[button(state, text, action) for text, action in row] for row in rows]}
+def markup(state, rows, back="home"):
+    return footer(state, [[button(state, text, action) for text, action in row] for row in rows], back)
 
 
 def profile_text(profile):
@@ -114,7 +115,10 @@ class PlanningUI:
     async def callback(self, job, state, action, argument, directory, choice=None):
         bot = self.bot
         state.pop("refine_position", None)
-        if action in {'plan', 'profile'}:
+        if action == 'profileback':
+            state['profile_draft'] = None
+            self.enter(job, state)
+        elif action in {'plan', 'profile'}:
             self.enter(job, state, edit=action == 'profile')
         elif action == 'home':
             state['mode'], state['profile_draft'] = 'home', None
@@ -189,16 +193,18 @@ class PlanningUI:
                 bot.apply(job, state, 'plan_day')
             else:
                 bot.apply(job, state, 'plan_slot' if action == 'slot' else 'plan_alternatives')
-        elif action in {'shopping', 'day', 'meal'}:
+        elif action in {'shopping', 'day', 'page', 'meal'}:
             plan = state.get('meal_plan')
             if not plan:
                 bot.apply(job, state, 'planning')
                 return True
             if action == 'shopping':
                 bot.apply(job, state, 'shopping')
-            elif action == 'day':
+            elif action in {'day', 'page'}:
                 day = int(argument or 0)
                 if 0 <= day < plan['days']:
+                    if action == 'page':
+                        bot.store.checkpoint(job, 'day_message', job['payload'].get('message_id') or state.get('panel'))
                     state['plan_day'] = day
                     bot.apply(job, state, 'plan_day')
             else:
@@ -226,6 +232,7 @@ class PlanningUI:
                 markup(state, [[('Из холодильника', 'list')], [('План питания', 'plan')]]))
             return
         plan = state.get('meal_plan')
+        back = 'home'
         if view in {'shopping', 'plan_day', 'plan_slot', 'plan_alternatives', 'plan_refine'} and plan:
             fresh = plan['inventory_hash'] == fingerprint(state['inventory'])
             if view in {'plan_slot', 'plan_alternatives', 'plan_refine'}:
@@ -267,14 +274,16 @@ class PlanningUI:
                         rows.append([('Составить новое меню', f"build:{plan['days']}")])
                 if fresh and all('items' in r for r in plan['recipes']) and view != 'plan_refine':
                     rows.append([('Уточнить предпочтения', f'refine:{position}')])
-                rows.append([('К меню дня', f'day:{day}'), ('Что докупить', 'shopping')])
+                rows.append([('Что докупить', 'shopping')])
+                back = f'day:{day}' if view == 'plan_slot' else f'slot:{position}'
             elif view == 'shopping':
                 text = shopping_text(plan) if fresh else (
                     'Список продуктов изменился. Обнови план, чтобы пересчитать недостающие покупки.')
-                rows = [[('Показать меню', 'day:0')]]
+                rows = []
+                back = f"day:{state.get('plan_day', 0)}"
                 if not fresh:
                     rows.insert(0, [('Обновить план и покупки', f"build:{plan['days']}")])
-                rows.extend([[('Мои продукты', 'list')], [('План питания', 'plan')]])
+                rows.append([('Мои продукты', 'list')])
             else:
                 day = min(state.get('plan_day', 0), plan['days'] - 1)
                 parts, rows = [f"День {day + 1} из {plan['days']} · на {plan['people']} чел.",
@@ -293,16 +302,18 @@ class PlanningUI:
                     parts.extend(['', 'Запасы изменились — покупки нужно пересчитать.'])
                 nav = []
                 if day:
-                    nav.append(('← День ' + str(day), f'day:{day - 1}'))
+                    nav.append(('← День ' + str(day), f'page:{day - 1}'))
                 if day + 1 < plan['days']:
-                    nav.append(('День ' + str(day + 2) + ' →', f'day:{day + 1}'))
+                    nav.append(('День ' + str(day + 2) + ' →', f'page:{day + 1}'))
                 if nav:
                     rows.append(nav)
-                rows.extend([[('Что докупить', 'shopping'), ('План питания', 'plan')]])
+                rows.append([('Что докупить', 'shopping')])
+                back = 'plan'
                 text = '\n'.join(parts)
         else:
             draft, profile = state.get('profile_draft'), state.get('profile')
             if draft is not None or not profile:
+                back = 'profileback' if profile else 'home'
                 question = profile_question(draft or {})
                 if not draft:
                     text = INTRO
@@ -318,9 +329,15 @@ class PlanningUI:
                         [('На две недели', 'build:14')], [('Изменить профиль', 'profile')]]
                 if plan:
                     rows.insert(0, [('Моё меню', 'day:0'), ('Что докупить', 'shopping')])
-            rows.extend([[('Мои продукты', 'list'), ('Главное меню', 'home')]])
+            rows.append([('Мои продукты', 'list')])
+        if view == 'plan_day' and job['cache'].get('day_message'):
+            state['panel'] = job['cache']['day_message']
+            await self.bot.panel(job, state, text, markup(state, rows, back))
+            with self.bot.store.db:
+                self.bot.store.save(job["owner"], state)
+            return
         # Send below the user's last action and pack long shopping lists safely as plain text.
-        result = await self.bot.say(job, text, f'planning:{view}', markup(state, rows))
+        result = await self.bot.say(job, text, f'planning:{view}', markup(state, rows, back))
         state['panel'] = result['message_id']
         with self.bot.store.db:
             self.bot.store.save(job['owner'], state)

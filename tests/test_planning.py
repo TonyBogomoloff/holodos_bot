@@ -178,7 +178,7 @@ def test_profile_plan_navigation_retry_persistence_and_deletion(tmp_path):
             return job
         await handle('/start')
         assert [row[0]['text'] for row in telegram.sent[-1][1]['reply_markup']['inline_keyboard']] == [
-            'Из холодильника', 'План питания']
+            'Из холодильника', 'План питания', 'Назад']
         await handle(action='plan')
         await handle('Нас двое, 3 приёма пищи, 100 евро в неделю, Испания, простые блюда, без ограничений')
         assert store.session(1)['profile'] is None  # Explicit in-bot confirmation.
@@ -397,5 +397,33 @@ def test_refine_voice_keeps_profile_menu_and_budget_then_offers_new_verified_rec
         await dispatch(3, {'kind': 'callback', 'data': f"h:{updated['rev']}:refine:0"})
         await dispatch(4, {'kind': 'callback', 'data': f"h:{store.session(1)['rev']}:day:0"})
         assert store.session(1).get('refine_position') is None
+        store.close()
+    asyncio.run(run())
+
+
+def test_day_paging_edits_clicked_message_and_all_views_have_footer(tmp_path):
+    async def run():
+        plan = await generate(tmp_path, inventory=[])
+        store, telegram = Store(tmp_path / 'navigation.sqlite'), Telegram()
+        state = store.session(1)
+        state.update(profile=PROFILE, meal_plan=plan, mode='plan', panel=999)
+        with store.db:
+            store.save(1, state)
+        bot = Bot(Config('dummy:token', 'key', tmp_path), store, telegram, None, Model(), Web())
+        for seq, action in enumerate(['page:1', 'page:0', 'slot:0', 'alternatives:0',
+                                      'refine:0', 'shopping', 'plan', 'home', 'list', 'choices'], 1):
+            store.ingest(seq, 1, {'kind': 'callback', 'data': f"h:{store.session(1)['rev']}:{action}",
+                                 'message_id': 321})
+            job = store.claim()
+            await bot.handle(job)
+            store.finish(job)
+            method, message = telegram.sent[-1]
+            rows = message['reply_markup']['inline_keyboard']
+            assert [b['text'] for b in rows[-1]] == ['Назад', 'Главное меню']
+            if action.startswith('page:'):
+                assert method == 'editMessageText' and message['message_id'] == 321
+                assert message['text'].startswith('День 2' if action == 'page:1' else 'День 1')
+                assert any(':page:' in b['callback_data'] for row in rows for b in row)
+                assert not any(m == 'sendMessage' for m, _ in telegram.sent)
         store.close()
     asyncio.run(run())
