@@ -16,7 +16,7 @@ from .store import Store
 COMMANDS = [{"command": name, "description": text} for name, text in [
     ("start", "Главное меню"), ("plan", "План питания"), ("profile", "Профиль питания"),
     ("products", "Мои продукты"), ("new", "Новый список продуктов"),
-    ("help", "Как пользоваться"), ("privacy", "О твоих данных"), ("delete", "Удалить мои данные")]]
+    ("help", "Как пользоваться")]]
 
 
 async def execute(args):

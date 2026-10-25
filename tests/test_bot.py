@@ -272,3 +272,44 @@ def test_new_list_cancel_and_failed_intake_keep_old_inventory(tmp_path, kind):
         assert store.session(1)['inventory'] == new
         store.close()
     asyncio.run(run())
+
+
+def test_help_privacy_delete_navigation_and_menu(tmp_path):
+    from holodos_bot.cli import COMMANDS
+    PROFILE = {"people": 2, "meals": 3, "budget": 100, "budget_days": 7, "currency": "EUR",
+               "region": "Испания", "preferences": "простые блюда", "restrictions": "нет", "clarification": ""}
+
+    async def run():
+        store, telegram = Store(tmp_path / 'db.sqlite'), Telegram()
+        bot = Bot(Config('dummy:token', 'key', tmp_path), store, telegram, None, None, None)
+        for owner in (1, 2):
+            state = store.session(owner)
+            state['inventory'] = [{'name': 'рис', 'quantity': '1 кг', 'uncertain': False}]
+            state['profile'] = PROFILE.copy()
+            store.save(owner, state)
+        async def handle(update, action):
+            payload = {'kind': 'text', 'text': action} if action.startswith('/') else {
+                'kind': 'callback', 'data': f"h:{store.session(1)['rev']}:{action}"}
+            store.ingest(update, 1, payload)
+            job = store.claim()
+            await bot.handle(job)
+            store.finish(job)
+            return telegram.sent[-1][1]
+        def actions(message):
+            return {b['callback_data'].split(':')[2]: b['text']
+                    for row in message['reply_markup']['inline_keyboard'] for b in row}
+        help_message = await handle(1, '/help')
+        assert actions(help_message)['privacy'] == 'Privacy'
+        assert 'delete' not in actions(help_message)
+        privacy = await handle(2, 'privacy')
+        assert actions(privacy)['delete'] == 'Удалить все данные'
+        assert {'help', 'home'} <= actions(privacy).keys()
+        assert 'privacy' in actions(await handle(3, 'help'))
+        await handle(4, 'privacy')
+        await handle(5, 'delete')
+        assert store.session(1)['inventory'] == []
+        assert store.session(1)['profile'] is None
+        assert store.session(2)['profile'] == PROFILE
+        assert store.session(2)['inventory']
+    assert not {'privacy', 'delete'} & {c['command'] for c in COMMANDS}
+    asyncio.run(run())

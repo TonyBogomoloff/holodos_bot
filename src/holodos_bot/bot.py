@@ -18,8 +18,8 @@ WELCOME = "Привет! Покажи, что у тебя в холодильн�
           "Пришли одно или несколько фото. Можно и просто перечислить продукты — текстом или голосом."
 PRIVACY = "Фото и текст обрабатывает OpenAI, голос — Groq. Загруженные файлы удаляются после обработки, " \
           "список холодильника и правки — после суток бездействия. " \
-          "Профиль питания и последний план с покупками хранятся до /delete. " \
-          "Резервные копии живут до суток. /delete — удалить все сохранённые данные сейчас."
+          "Профиль питания и последний план с покупками хранятся, пока ты их не удалишь. " \
+          "Резервные копии живут до суток. Кнопка ниже удалит все сохранённые данные сейчас."
 
 
 def normalize_update(update, allowed=()):
@@ -180,6 +180,36 @@ class Bot:
             return False
         return True
 
+    async def show_info(self, job, state, view):
+        privacy = view == "privacy"
+        text = PRIVACY if privacy else (
+            "Пришли фото холодильника — я сам распознаю продукты. Следующие фото дополнят список.\n"
+            "Поправить список можно текстом или голосом: «Убери молоко, добавь рис».\n"
+            "Потом нажми «Подобрать блюда». Можно добавить пожелание: «Без мяса, до 30 минут».\n\n"
+            "В «Плане питания» укажи бюджет, людей, приёмы пищи, вкусы и ограничения. "
+            "Сначала покажу меню на день или неделю. Блюда можно заменить, затем открыть покупки.\n"
+            "КБЖУ и стоимость ориентировочные.\n\n"
+            "/plan — план питания\n/profile — профиль\n/new — новый список\n"
+            "/products — мои продукты")
+        action, label = ("delete", "Удалить все данные") if privacy else ("privacy", "Privacy")
+        markup = footer(state, [[{"text": label, "callback_data": f"h:{state['rev']}:{action}"}]],
+                        "help" if privacy else "home")
+        await self.say(job, text, markup=markup)
+
+    async def delete_data(self, job):
+        with self.store.db:
+            self.store.db.execute("DELETE FROM sessions WHERE owner=?", (job["owner"],))
+            self.store.db.execute("DELETE FROM planning WHERE owner=?", (job["owner"],))
+            ids = [r[0] for r in self.store.db.execute(
+                "SELECT id FROM jobs WHERE owner=? AND id!=?", (job["owner"], job["id"]))]
+            for identity in ids:
+                self.store.db.execute("DELETE FROM effects WHERE key LIKE ?", (f"{identity}:%",))
+            self.store.db.execute("DELETE FROM jobs WHERE owner=? AND id!=?", (job["owner"], job["id"]))
+        for identity in ids:
+            shutil.rmtree(self.work / str(identity), ignore_errors=True)
+        self.store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        await self.say(job, "Удалил продукты, правки, профиль и план питания. Можно начать заново")
+
     async def handle(self, job):
         state = self.store.session(job["owner"])
         directory = self.work / str(job["id"])
@@ -188,7 +218,7 @@ class Bot:
             p = job["payload"]
             if p["kind"] == "callback":
                 match = re.fullmatch(r"h:(\d+):(recognize|search|shop|undo|add|new|list|pick|choices|"
-                                     r"home|plan|profile|profileback|saveprofile|build|shopping|day|page|meal|slot|alternatives|replace|refine)(?::(\d+))?(?::(\d+))?",
+                                     r"help|privacy|delete|home|plan|profile|profileback|saveprofile|build|shopping|day|page|meal|slot|alternatives|replace|refine)(?::(\d+))?(?::(\d+))?",
                                      p["data"])
                 if not match or (match[4] is not None and match[2] != "replace") or int(match[1]) != state["rev"]:
                     await self.say(job, "Этот список уже изменился. Вот актуальный", "stale")
@@ -200,6 +230,12 @@ class Bot:
                 action = match[2]
                 if action != "new":
                     state.pop("new_list_pending", None)
+                if action in {"help", "privacy", "delete"}:
+                    if action == "delete":
+                        await self.delete_data(job)
+                    else:
+                        await self.show_info(job, state, action)
+                    return
                 if await self.planning.callback(job, state, action, match[3], directory, match[4]):
                     if not job['cache'].get('applied'):
                         return
@@ -309,29 +345,10 @@ class Bot:
                 elif command == "/new":
                     self.begin_new_list(job, state)
                 elif command in {"/help", "/privacy"}:
-                    await self.say(job, PRIVACY if command == "/privacy" else
-                        "Пришли фото холодильника — я сам распознаю продукты. Следующие фото дополнят список.\n"
-                        "Поправить список можно текстом или голосом: «Убери молоко, добавь рис».\n"
-                        "Потом нажми «Подобрать блюда». Можно добавить пожелание: «Без мяса, до 30 минут».\n\n"
-                        "В «Плане питания» укажи бюджет, людей, приёмы пищи, вкусы и ограничения. "
-                        "Сначала покажу меню на день, неделю или две. Блюда можно заменить, затем открыть покупки.\n"
-                        "КБЖУ и стоимость ориентировочные.\n\n"
-                        "/plan — план питания\n/profile — профиль\n/new — новый список\n"
-                        "/products — мои продукты\n/privacy — о данных\n/delete — удалить данные")
+                    await self.show_info(job, state, command[1:])
                     return
                 elif command == "/delete":
-                    with self.store.db:
-                        self.store.db.execute("DELETE FROM sessions WHERE owner=?", (job["owner"],))
-                        self.store.db.execute("DELETE FROM planning WHERE owner=?", (job["owner"],))
-                        ids = [r[0] for r in self.store.db.execute(
-                            "SELECT id FROM jobs WHERE owner=? AND id!=?", (job["owner"], job["id"]))]
-                        for identity in ids:
-                            self.store.db.execute("DELETE FROM effects WHERE key LIKE ?", (f"{identity}:%",))
-                        self.store.db.execute("DELETE FROM jobs WHERE owner=? AND id!=?", (job["owner"], job["id"]))
-                    for identity in ids:
-                        shutil.rmtree(self.work / str(identity), ignore_errors=True)
-                    self.store.db.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-                    await self.say(job, "Удалил продукты, правки, профиль и план питания. Можно начать заново")
+                    await self.delete_data(job)
                     return
                 elif command:
                     await self.say(job, "Пришли фото или список продуктов. /help — короткая подсказка.")
