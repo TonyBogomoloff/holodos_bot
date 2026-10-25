@@ -211,3 +211,64 @@ def test_inventory_diff_formats_changes_and_escapes_input():
     state['inventory'] = []
     assert '<s>рис</s>' in inventory_text(state, changes=True)
     assert 'Список пуст.' in inventory_text(state, changes=True)
+
+
+@pytest.mark.parametrize('kind', ['text', 'voice', 'photo'])
+def test_new_list_cancel_and_failed_intake_keep_old_inventory(tmp_path, kind):
+    async def run():
+        from PIL import Image
+        store, telegram = Store(tmp_path / 'new-list.sqlite'), Telegram()
+        old = [{'name': 'рис', 'quantity': '500 г', 'uncertain': False}]
+        new = [{'name': 'молоко', 'quantity': '1 л', 'uncertain': False}]
+        class Model:
+            fail = True
+            async def ask(self, prompt, schema, data, **kwargs):
+                assert data['inventory'] == []
+                if self.fail:
+                    raise ProviderError('test_failure')
+                return {'inventory': new, 'preferences': '', 'reply': 'Готово'}
+        async def download(file_id, target, *args):
+            Image.new('RGB', (32, 32)).save(target, format='PNG')
+        telegram.download = download
+        model = Model()
+        bot = Bot(Config('dummy:token', 'key', tmp_path), store, telegram, None, model, None)
+        state = store.session(1)
+        state['inventory'] = old
+        state['recognized_photos'] = ['same']
+        with store.db:
+            store.save(1, state)
+        seq = 0
+        async def callback(action):
+            nonlocal seq
+            seq += 1
+            store.ingest(seq, 1, {'kind': 'callback', 'data': f"h:{store.session(1)['rev']}:{action}"})
+            job = store.claim()
+            await bot.handle(job)
+            store.finish(job)
+        for cancel in ['list', 'home']:
+            await callback('new')
+            assert store.session(1)['inventory'] == old
+            assert store.session(1)['new_list_pending']
+            await callback(cancel)
+            assert store.session(1)['inventory'] == old
+            assert not store.session(1).get('new_list_pending')
+        await callback('new')
+        seq += 1
+        payload = {'kind': kind, 'text': 'молоко 1 л', 'file_id': 'same', 'unique': 'same',
+                   'caption': '', 'duration': 2}
+        store.ingest(seq, 1, payload)
+        job = store.claim()
+        if kind == 'voice':
+            store.checkpoint(job, 'transcript', 'молоко 1 л')
+        with pytest.raises(ProviderError, match='test_failure'):
+            await bot.handle(job)
+        assert store.session(1)['inventory'] == old
+        assert store.session(1)['new_list_pending']
+        model.fail = False
+        await bot.handle(job)
+        assert store.session(1)['inventory'] == new
+        assert not store.session(1).get('new_list_pending')
+        await bot.handle(job)
+        assert store.session(1)['inventory'] == new
+        store.close()
+    asyncio.run(run())

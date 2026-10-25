@@ -198,6 +198,8 @@ class Bot:
                         await self.panel(job, state)
                     return
                 action = match[2]
+                if action != "new":
+                    state.pop("new_list_pending", None)
                 if await self.planning.callback(job, state, action, match[3], directory, match[4]):
                     if not job['cache'].get('applied'):
                         return
@@ -253,13 +255,22 @@ class Bot:
                         state["rev"] += 1
                     self.apply(job, state, notice="Вернул предыдущий список.")
                 elif action == "new":
-                    state = self.reset(state)
-                    self.apply(job, state, notice="Начнём заново. Пришли фото или перечисли продукты")
+                    self.begin_new_list(job, state)
                 elif action == "add":
                     self.apply(job, state, notice="Пришли ещё фото сюда — можно несколько сразу.")
                 else:
                     state['mode'] = 'inventory'
                     self.apply(job, state)
+            elif p["kind"] == "photo" and state.get('new_list_pending'):
+                if not await self.limit(job):
+                    return
+                candidate = self.reset(state)
+                candidate['photos'] = [p]
+                progress = await self.say(job, 'Рассматриваю новый список…', 'new_photo_progress',
+                                          {'inline_keyboard': []})
+                candidate['panel'] = progress['message_id']
+                await self.recognize(job, candidate, directory)
+                self.apply(job, candidate, changes=True)
             elif p["kind"] == "photo":
                 state['mode'] = 'inventory'
                 # Each photo gets a new panel below the incoming message. Keep its ID
@@ -286,16 +297,17 @@ class Bot:
                 text = p.get("text", "").strip()
                 command = text.split(maxsplit=1)[0].split("@")[0].lower() if text.startswith("/") else ""
                 if command in {"/start", "/products", "/cancel"}:
+                    state.pop('new_list_pending', None)
                     state.pop('refine_position', None)
                     state['panel'], state['profile_draft'] = None, None
                     state['mode'] = 'inventory' if command == '/products' else 'home'
                     state['rev'] += 1
                     self.apply(job, state, 'inventory' if command == '/products' else 'home')
                 elif command in {'/plan', '/profile'}:
+                    state.pop('new_list_pending', None)
                     self.planning.enter(job, state, edit=command == '/profile')
                 elif command == "/new":
-                    state = self.reset(state)
-                    self.apply(job, state)
+                    self.begin_new_list(job, state)
                 elif command in {"/help", "/privacy"}:
                     await self.say(job, PRIVACY if command == "/privacy" else
                         "Пришли фото холодильника — я сам распознаю продукты. Следующие фото дополнят список.\n"
@@ -351,6 +363,8 @@ class Bot:
                         return
                     if not await self.limit(job):
                         return
+                    if state.get("new_list_pending"):
+                        state = self.reset(state)
                     if not await self.planning.text(job, state, text):
                         result = await self.cached(job, "inventory", lambda: self.luna.ask(
                             INVENTORY_PROMPT, INVENTORY_SCHEMA,
@@ -361,7 +375,11 @@ class Bot:
         applied = job["cache"]["applied"]
         # State and applied checkpoint are committed together; retries never apply a correction twice.
         state = self.store.session(job["owner"])
-        if applied['view'] in {'home', 'planning', 'shopping', 'plan_day', 'plan_slot', 'plan_alternatives', 'plan_refine'}:
+        if applied['view'] == 'new_list':
+            await self.panel(job, state,
+                'Пришли новый список текстом, голосом или фото. Старые продукты заменю только после обработки. '
+                '⬅️ или 🏠 — отменить.', footer(state, [], 'list'))
+        elif applied['view'] in {'home', 'planning', 'shopping', 'plan_day', 'plan_slot', 'plan_alternatives', 'plan_refine'}:
             await self.planning.show(job, state, applied['view'])
         elif applied["view"] == "results":
             await self.show_results(job, state)
@@ -409,6 +427,11 @@ class Bot:
         state["inventory"], state["preferences"] = result["inventory"], result["preferences"]
         state["recipes"], state["searched"] = [], False
         state["rev"] += 1
+
+    def begin_new_list(self, job, state):
+        state['new_list_pending'], state['mode'] = True, 'inventory'
+        state['rev'] += 1
+        self.apply(job, state, 'new_list')
 
     @staticmethod
     def reset(state):
