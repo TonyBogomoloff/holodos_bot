@@ -1,0 +1,35 @@
+{
+  "file": "holodos-intro-v1-ru.mp4",
+  "sha256": "5c7beccf2f495631cab38beba407d0018b998e8a23b771124aa9a5196ac17a00",
+  "bytes": 1958432,
+  "duration_seconds": 30.0,
+  "frames": 900,
+  "codec": "h264",
+  "resolution": [
+    720,
+    1280
+  ],
+  "fps": "30/1",
+  "pixel_format": "yuv420p",
+  "color_space": "bt709",
+  "silent": true,
+  "faststart": true,
+  "full_decode": "passed",
+  "review_frames": [
+    45,
+    120,
+    180,
+    280,
+    354,
+    410,
+    478,
+    535,
+    610,
+    700,
+    770,
+    860
+  ],
+  "visual_review": "12 sampled video frames inspected; text and controls fit",
+  "typescript": "passed",
+  "python_lint": "passed"
+}

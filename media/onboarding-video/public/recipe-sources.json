@@ -1,0 +1,59 @@
+{
+  "omelette": {
+    "title": "Омлет с помидорами и сыром на сковороде",
+    "url": "https://1000.menu/cooking/57273-omlet-s-pomidorami-i-syrom-na-skovorode",
+    "image_url": "https://static.1000.menu/res/380/img/content-v2/85/6d/57273/omlet-s-pomidorami-i-syrom-na-skovorode_1627616326_1_max.jpg",
+    "ingredients": [
+      "Яйца - 3 шт.",
+      "Помидоры - 2 шт.",
+      "Молоко - 100 мл",
+      "Твёрдый сыр - 50 гр",
+      "Растительное масло - 20 гр",
+      "Зелень - по вкусу",
+      "Соль - по вкусу",
+      "Специи сухие - по вкусу"
+    ],
+    "time": "PT15M",
+    "yield": "2",
+    "nutrition": {},
+    "downloaded_image_url": "https://static.1000.menu/res/380/img/content-v2/85/6d/57273/omlet-s-pomidorami-i-syrom-na-skovorode_1627616326_1_max.jpg",
+    "page_sha256": "e6fb6305cb831f6283c4f6b0e017e19437ef35c920283d34c1e40e92e027b9b8",
+    "image_sha256": "37abbcafc28b237d0aec5179c62c58b9a28705b879a98ea71da56f2901c6a014",
+    "verified_step_count": 8
+  },
+  "pasta": {
+    "title": "Creamy Tomato and Spinach Pasta",
+    "url": "https://www.budgetbytes.com/creamy-tomato-spinach-pasta/",
+    "image_url": "https://www.budgetbytes.com/wp-content/uploads/2020/05/CreamyTomatoSpinachPasta_OverheadPlated.jpg",
+    "ingredients": [
+      "½ lb penne pasta ($0.49)",
+      "1 yellow onion (small dice, 340g, 1.5 cups, $0.78)",
+      "2 cloves garlic (minced, 1 Tbsp, $0.12)",
+      "1 Tbsp olive oil ($0.18)",
+      "14.5 oz. diced tomatoes (1 can, $0.96)",
+      "½ tsp dried oregano ($0.12)",
+      "½ tsp dried basil ($0.13)",
+      "⅛ tsp crushed red pepper ($0.02)",
+      "½ tsp salt ($0.02)",
+      "½ tsp freshly cracked black pepper ($0.08)",
+      "2 Tbsp tomato paste ($0.14)",
+      "½ cup water ($0.00)",
+      "2 oz cream cheese ($0.46)",
+      "¼ cup grated Parmesan (30g, $0.51)",
+      "4 oz fresh spinach ($0.79)"
+    ],
+    "time": "PT25M",
+    "yield": "4",
+    "nutrition": {
+      "calories": "363 kcal",
+      "proteinContent": "13 g",
+      "fatContent": "11 g",
+      "carbohydrateContent": "54 g",
+      "servingSize": "1 serving"
+    },
+    "downloaded_image_url": "https://www.budgetbytes.com/wp-content/uploads/2020/05/CreamyTomatoSpinachPasta_OverheadPlated.jpg",
+    "page_sha256": "48a452f15c3b8c031cfb826e2f8eb1899dd376a52a89b2e7c05b42349a77a508",
+    "image_sha256": "ab58bace58bbbeed2b2f33617672b1e5a7e94275c850b1cfa9cf1b5a5311be9e",
+    "verified_step_count": 6
+  }
+}

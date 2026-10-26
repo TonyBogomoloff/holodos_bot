@@ -1,0 +1,5 @@
+allowBuilds:
+  esbuild: true
+overrides:
+  # Keep Remotion's pinned Webpack compatible with its validator dependency.
+  schema-utils: 4.3.3
