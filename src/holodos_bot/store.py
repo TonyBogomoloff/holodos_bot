@@ -24,6 +24,8 @@ class Store:
               owner INTEGER PRIMARY KEY, state TEXT NOT NULL, updated REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS planning(
               owner INTEGER PRIMARY KEY, state TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS onboarding(
+              owner INTEGER PRIMARY KEY, status TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS jobs(
               id INTEGER PRIMARY KEY AUTOINCREMENT, update_id INTEGER UNIQUE NOT NULL,
               owner INTEGER NOT NULL, payload TEXT NOT NULL, cache TEXT NOT NULL DEFAULT '{}',
@@ -156,6 +158,19 @@ class Store:
             self.db.execute("INSERT INTO effects VALUES(?,?,?,?) ON CONFLICT(key) DO UPDATE "
                             "SET status=excluded.status,result=excluded.result",
                             (key, status, encoded(result), time.time()))
+
+    def claim_onboarding(self, owner):
+        # A reservation survives crashes and daily session cleanup: an uncertain
+        # send must not produce a second welcome video on the next /start.
+        with self.db:
+            return self.db.execute("INSERT OR IGNORE INTO onboarding VALUES(?,'sending')", (owner,)).rowcount == 1
+
+    def finish_onboarding(self, owner, status):
+        with self.db:
+            if status == 'retryable':
+                self.db.execute('DELETE FROM onboarding WHERE owner=?', (owner,))
+            else:
+                self.db.execute('UPDATE onboarding SET status=? WHERE owner=?', (status, owner))
 
     def cleanup(self, hours):
         cutoff = time.time() - hours * 3600

@@ -68,9 +68,11 @@ def prepare(args):
             json.dump(value, f, indent=2)
     config.chmod(0o600)
     run([python, '-m', 'holodos_bot', 'check', '--config', str(config)], cwd=candidate)
+    run([python, 'scripts/prepare_video_cache.py', '--app', str(APP)], cwd=candidate)
     verify(candidate)
     receipt = {'sha': manifest['sha'], 'manifest_hash': digest((candidate / 'release.json').read_bytes()),
-               'checks': ['ruff', 'pytest', 'telegram_getMe', 'chatgpt_auth'], 'test_paths': args.tests, 'created': time.time()}
+               'checks': ['ruff', 'pytest', 'telegram_getMe', 'chatgpt_auth', 'video_cache'],
+               'test_paths': args.tests, 'created': time.time()}
     (candidate / 'validation.json').write_text(json.dumps(receipt, indent=2))
     print(json.dumps(receipt))
 
@@ -100,6 +102,8 @@ def install(args):
             previous_manifest = verify(previous)
             if previous_manifest['sha'] != old_sha:
                 raise RuntimeError('production_manifest_changed')
+        run([str(candidate / '.venv/bin/python'), 'scripts/prepare_video_cache.py',
+             '--app', str(APP), '--check'], cwd=candidate)
         unit = Path.home() / '.config/systemd/user' / SERVICE
         old_unit = unit.read_bytes() if unit.exists() else None
         if old_unit:

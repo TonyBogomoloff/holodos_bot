@@ -55,6 +55,9 @@ class Telegram:
         if isinstance(data, dict) and data.get("ok"):
             return data["result"]
         description = str(data.get("description", "")) if isinstance(data, dict) else ""
+        if status == 400 and any(value in description.lower() for value in (
+                'wrong file identifier', 'wrong remote file identifier', 'invalid file_id', 'file_id not found')):
+            raise ProviderError('telegram_file_invalid')
         if "message is not modified" in description:
             return True
         if "message to edit not found" in description or "message can't be edited" in description:
@@ -80,6 +83,17 @@ class Telegram:
             return self.result(r.json(), r.status_code)
         except (httpx.HTTPError, ValueError):
             raise ProviderError("telegram_transport_unknown") from None
+
+    async def video(self, owner, path, *, caption='', silent=False):
+        data = {'chat_id': str(owner), 'caption': caption, 'supports_streaming': 'true',
+                'disable_notification': json.dumps(silent), 'duration': '30', 'width': '720', 'height': '1280'}
+        try:
+            with path.open('rb') as handle:
+                response = await self.client.post(self.base + 'sendVideo', data=data,
+                    files={'video': (path.name, handle, 'video/mp4')}, timeout=httpx.Timeout(90, connect=10))
+            return self.result(response.json(), response.status_code)
+        except (httpx.HTTPError, ValueError):
+            raise ProviderError('telegram_transport_unknown') from None
 
     async def download(self, file_id, destination, max_bytes=20_000_000):
         info = await self.call("getFile", file_id=file_id)

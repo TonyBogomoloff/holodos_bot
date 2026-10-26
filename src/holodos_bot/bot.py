@@ -5,10 +5,12 @@ import json
 import logging
 import re
 import shutil
+import sqlite3
 import time
 from pathlib import Path
 
 from .navigation import footer
+from .onboarding import CACHE_NAME, VIDEO, VideoCache, video_payload
 from .planning import amount, multiplier, number, quantity
 from .planning_ui import PlanningUI, nutrition_text
 from .providers import ProviderError, prepare_image
@@ -20,6 +22,7 @@ WELCOME = "Привет! Покажи, что у тебя в холодильн�
 PRIVACY = "Фото и текст обрабатывает OpenAI, голос — Groq. Загруженные файлы удаляются после обработки, " \
           "список холодильника и правки — после суток бездействия. " \
           "Профиль питания и последний план с покупками хранятся, пока ты их не удалишь. " \
+          "Также помню, что приветственное видео уже отправлялось, чтобы не повторять его. " \
           "Резервные копии живут до суток. Кнопка ниже удалит все сохранённые данные сейчас."
 
 
@@ -115,6 +118,7 @@ class Bot:
         self.config, self.store, self.telegram, self.groq, self.luna = config, store, telegram, groq, luna
         self.recipes = RecipeSearch(luna, web)
         self.planning = PlanningUI(self, luna, web)
+        self.video_cache = VideoCache(config.data_dir / CACHE_NAME, config.token.split(':', 1)[0])
         self.stop = asyncio.Event()
         self.busy_notices = {}
         self.work = config.data_dir / "work"
@@ -230,6 +234,30 @@ class Bot:
             return False
         return True
 
+    async def show_video(self, job, *, first_start=False):
+        reserved = False
+        try:
+            file_id = self.video_cache.get(self.video_cache.digest(VIDEO))
+            if not file_id:
+                raise ProviderError('video_cache_not_ready')
+            if first_start:
+                reserved = self.store.claim_onboarding(job['owner'])
+                if not reserved:
+                    return
+            await self.effect(job, 'start_video' if first_start else 'help_video',
+                              lambda: self.telegram.call('sendVideo', **video_payload(job['owner'], file_id)))
+        except (ProviderError, OSError, sqlite3.Error) as error:
+            code = str(error) if isinstance(error, ProviderError) else type(error).__name__
+            if reserved:
+                uncertain = not isinstance(error, ProviderError) or code in {'telegram_transport_unknown', 'delivery_unknown'}
+                status = 'unknown' if uncertain else 'retryable'
+                self.store.finish_onboarding(job['owner'], status)
+            log.warning('demo_video_failed code=%s', code)
+            # A failed or ambiguous video delivery must not hide the usable menu.
+        else:
+            if reserved:
+                self.store.finish_onboarding(job['owner'], 'sent')
+
     async def show_info(self, job, state, view):
         privacy = view == "privacy"
         text = PRIVACY if privacy else (
@@ -245,11 +273,14 @@ class Bot:
         markup = footer(state, [[{"text": label, "callback_data": f"h:{state['rev']}:{action}"}]],
                         "help" if privacy else "home")
         await self.say(job, text, markup=markup)
+        if not privacy:
+            await self.show_video(job)
 
     async def delete_data(self, job):
         with self.store.db:
             self.store.db.execute("DELETE FROM sessions WHERE owner=?", (job["owner"],))
             self.store.db.execute("DELETE FROM planning WHERE owner=?", (job["owner"],))
+            self.store.db.execute("DELETE FROM onboarding WHERE owner=?", (job["owner"],))
             ids = [r[0] for r in self.store.db.execute(
                 "SELECT id FROM jobs WHERE owner=? AND id!=?", (job["owner"], job["id"]))]
             for identity in ids:
@@ -393,6 +424,8 @@ class Bot:
                 text = p.get("text", "").strip()
                 command = text.split(maxsplit=1)[0].split("@")[0].lower() if text.startswith("/") else ""
                 if command in {"/start", "/products", "/cancel"}:
+                    if command == '/start':
+                        await self.show_video(job, first_start=True)
                     state.pop('new_list_pending', None)
                     state.pop('refine_position', None)
                     state['panel'], state['profile_draft'] = None, None
