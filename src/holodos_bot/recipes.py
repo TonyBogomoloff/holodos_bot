@@ -15,6 +15,7 @@ import httpx
 from httpcore._backends.anyio import AnyIOBackend
 
 from .menu_recipe import MenuRecipeHTML
+from .pantry import with_staples
 from .providers import ProviderError, prepare_image
 
 RECIPE_DOMAINS = ("eda.ru", "eda.rambler.ru", "budgetbytes.com", "1000.menu")
@@ -271,7 +272,7 @@ SEARCH_PROMPT = """Найди существующие рецепты по по�
 Не заканчивай на первых 2–3 ссылках. Ищи простые блюда с небольшим количеством ингредиентов.
 Если передано exclude_urls, найди ДРУГИЕ рецепты и не возвращай эти URL повторно.
 Не придумывай URL и не отвечай из памяти. Ищи разные блюда, максимально подходящие продуктам и preferences.
-Учитывай только перечисленные продукты, даже соль и масло должны быть в списке.
+inventory включает продукты холодильника и базовый кухонный набор, доступный по умолчанию.
 Если allow_missing=true, допустимы 1–2 недостающих продукта. Иначе ищи полное совпадение состава.
 Нужны доступные без входа страницы с фотографией блюда и структурированной разметкой schema.org Recipe.
 Предпочитай русскоязычные рецепты «Еды» и 1000.menu, дополняй подходящими блюдами Budget Bytes.
@@ -288,7 +289,7 @@ inventory — индексы действительно имеющихся эк�
 курицу мясом вообще, пармезан любым сыром или готовую смесь её предполагаемыми компонентами.
 Для строки с несколькими обязательными продуктами нужны все; отсутствующие перечисли в missing.
 Если продукт не найден, missing — его короткое название по-русски, inventory может быть пустым.
-Соль, перец, масло и вода тоже не считаются имеющимися автоматически.
+Базовый кухонный набор уже включён в inventory. Подсолнечное масло не заменяет сливочное или оливковое.
 optional=true только если ИСТОЧНИК явно пишет 'optional', 'по желанию', а не по твоему усмотрению.
 Неизвестное количество продукта не означает отсутствие; пригодность по количеству не обещай.
 suitable=false для нарушения preferences, аллергенов, диеты, неподходящего оборудования/времени.
@@ -308,7 +309,7 @@ RENDER_PROMPT = """Переведи рецепт на простой русск�
 """
 
 
-def validated_matches(result, candidates, inventory, allow_missing):
+def validated_matches(result, candidates, inventory, allow_missing, *, fridge_count=None):
     selected, seen = [], set()
     for m in result["matches"]:
         identity = m["id"]
@@ -328,7 +329,8 @@ def validated_matches(result, candidates, inventory, allow_missing):
             continue
         missing = [x["missing"] for x in coverage if x["missing"] and not x["optional"]]
         # Require at least one available non-seasoning ingredient; entirely unrelated results are useless.
-        if not any(x["inventory"] for x in coverage) or len(missing) > (2 if allow_missing else 0):
+        if not any(i < (len(inventory) if fridge_count is None else fridge_count)
+                   for x in coverage for i in x["inventory"]) or len(missing) > (2 if allow_missing else 0):
             continue
         selected.append({**r, "title_ru": m["title_ru"] or r["title"], "missing": missing})
     selected.sort(key=lambda r: len(r["missing"]))
@@ -359,6 +361,8 @@ class RecipeSearch:
         return ready[:5]
 
     async def _batch(self, inventory, preferences, directory, allow_missing, excluded, offset, limit):
+        fridge_count = len(inventory)
+        inventory = with_staples(inventory)
         found = await self.luna.ask(SEARCH_PROMPT, SEARCH_SCHEMA,
             {"inventory": inventory, "preferences": preferences, "allow_missing": allow_missing,
              "exclude_urls": excluded, "allowed_domains": RECIPE_DOMAINS}, search=True)
@@ -391,7 +395,7 @@ class RecipeSearch:
             {"inventory": inventory, "preferences": preferences, "recipes": [
                 {"id": i, "title": r["title"], "ingredients": r["ingredients"],
                  "steps": r["steps"], "time": r["time"]} for i, r in enumerate(candidates)]})
-        selected = validated_matches(matches, candidates, inventory, allow_missing)
+        selected = validated_matches(matches, candidates, inventory, allow_missing, fridge_count=fridge_count)
         logging.info('recipe_matches candidates=%s matched=%s', len(candidates), len(selected))
         ready = []
         for recipe in selected:

@@ -70,8 +70,9 @@ class Model:
                                  'slots': [1, 2] if r['title'] == 'Rice' else [0],
                                  'nutrition': NUTRITION,
                                  'ingredients': [{'index': 0, 'name': 'рис' if r['title'] == 'Rice' else 'яйца',
-                                                  'inventory': [0 if r['title'] == 'Rice' else 1]
-                                                  if payload['inventory'] else [], 'cost': 1}]}
+                                                  'inventory': [j for j, item in enumerate(payload['inventory'])
+                                                                if item['name'] == ('рис' if r['title'] == 'Rice'
+                                                                                    else 'яйца')], 'cost': 1}]}
                                 for i, r in enumerate(payload['recipes'])]}
         if prompt == AUDIT_PROMPT:
             return {'recipes': [{'id': r['id'], 'safe': self.safe} for r in payload['recipes']]}

@@ -11,6 +11,7 @@ import unicodedata
 from collections import Counter
 from fractions import Fraction
 
+from .pantry import with_staples
 from .providers import ProviderError, prepare_image
 from .recipes import RECIPE_DOMAINS, SEARCH_SCHEMA, arr, extract_recipe, obj, recipe_source
 
@@ -180,6 +181,8 @@ AUDIT_PROMPT = """Проверь каждый рецепт независимо:
 
 
 def analyze_recipes(result, sources, inventory, slots):
+    fridge_count = len(inventory)
+    inventory = with_staples(inventory)
     ready, seen = [], set()
     for info in result["recipes"]:
         identity = info["id"]
@@ -207,7 +210,9 @@ def analyze_recipes(result, sources, inventory, slots):
             continue
         ready.append({**recipe, "title_ru": info["title_ru"] or recipe["title"],
                       "slots": info["slots"], "nutrition_estimate": nutrition,
-                      "items": [{**x, "quantity": quantity(recipe["ingredients"][x["index"]])}
+                      "items": [{**x, "pantry": bool(x["inventory"]) and all(i >= fridge_count for i in x["inventory"]),
+                                 "inventory": [i for i in x["inventory"] if i < fridge_count],
+                                 "quantity": quantity(recipe["ingredients"][x["index"]])}
                                 for x in ingredients]})
     return ready
 
@@ -219,6 +224,8 @@ def shopping_list(recipes, schedule, people, inventory):
         recipe = recipes[index]
         factor = people * count / recipe["servings"]
         for item in recipe["items"]:
+            if item.get("pantry"):
+                continue
             qty = item["quantity"]
             key = (item["name"].strip().casefold(), qty["unit"] if qty else "?")
             row = groups.setdefault(key, {"name": item["name"], "unit": qty["unit"] if qty else "",
@@ -332,7 +339,7 @@ class MealPlanner:
         for batch in range(2):
             await progress("Ищу рецепты для каждого приёма пищи… Это может занять несколько минут.")
             found = await remember(f"plan_search:{batch}", lambda: self.luna.ask(
-                PLAN_SEARCH_PROMPT, SEARCH_SCHEMA, {"profile": profile, "inventory": inventory,
+                PLAN_SEARCH_PROMPT, SEARCH_SCHEMA, {"profile": profile, "inventory": with_staples(inventory),
                     "days": days, "meal_labels": labels,
                     "allowed_domains": RECIPE_DOMAINS, "exclude_urls": tried,
                     "alternative_slots": [label for slot, label in enumerate(labels)
@@ -344,7 +351,7 @@ class MealPlanner:
                 continue
             await progress("Проверяю состав, порции и ограничения питания…")
             analysis = await remember(f"plan_analysis:{batch}", lambda: self.luna.ask(
-                ANALYSIS_PROMPT, ANALYSIS_SCHEMA, {"profile": profile, "inventory": inventory,
+                ANALYSIS_PROMPT, ANALYSIS_SCHEMA, {"profile": profile, "inventory": with_staples(inventory),
                     "meal_labels": labels,
                     "recipes": [{**r, "id": i} for i, r in enumerate(sources)]}))
             candidates = analyze_recipes(analysis, sources, inventory, profile["meals"])
