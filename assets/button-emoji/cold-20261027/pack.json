@@ -1,0 +1,11 @@
+{
+  "name_prefix": "HolodosMint20261027",
+  "title": "Холодос · Холодная мята",
+  "emoji": {
+    "dish": "🍽", "fridge": "🧊", "plan": "📋", "recognize": "📷",
+    "new_list": "📝", "shopping": "🛒", "recipe": "📖", "alternatives": "🔄",
+    "refine": "✏️", "profile": "👤", "save": "✅", "calendar": "📅",
+    "previous": "⬅️", "next": "➡️", "back": "↩️", "home": "🏠",
+    "help": "❓", "privacy": "🔒", "delete": "🗑"
+  }
+}

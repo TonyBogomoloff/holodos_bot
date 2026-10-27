@@ -1,0 +1,124 @@
+{
+  "mode": "built-in imagegen",
+  "palette": {
+    "mint": "#91D9BF",
+    "ice": "#E9F7F2",
+    "outline": "#173F39"
+  },
+  "images": [
+    {
+      "key": "fridge",
+      "prompt": "Use case: logo-brand. Asset: one minimalist Telegram custom emoji icon for Holodos, readable at 20px. Subject: a single closed two-door refrigerator seen exactly from the front, large simple rounded silhouette, one bold horizontal door gap and two short dark handles, no face. Flat vector-like graphic drawn as raster, only three solid colors: cool mint #91D9BF main fill, icy off-white #E9F7F2 highlight panel, deep teal #173F39 bold outer contour and details. Outline thickness about 5 percent of the icon width; generous open shapes. No 3D, gradients, shadows, texture, glints, face, eyes, arms, legs, food, letters, labels, text, numbers, badge or enclosing tile. One centered icon occupying 84 percent of square canvas with 8 percent clear padding. Background must be actually transparent alpha, no checkerboard. Crisp geometry, premium very simple pictogram. The cool mint and pale off-white echo a mint refrigerator mascot; strong dark teal contour makes it readable on both dark and light Telegram buttons. Create exactly one standalone image.",
+      "original": "originals/fridge.png",
+      "generated_file": "exec-74ce058b-441e-4232-8360-1bfc3459de8e.png"
+    },
+    {
+      "key": "dish",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: A simple serving cloche: one smooth mint dome, small knob, and bold horizontal base. Only one off-white broad highlight. No plate contents or decorations.",
+      "original": "originals/dish.png",
+      "generated_file": "exec-62dd4ca9-b10c-4eb2-b343-342add5e0b29.png"
+    },
+    {
+      "key": "plan",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: A simple upright clipboard with rounded corners, a chunky top clip, and exactly three large dark teal horizontal list lines on an icy off-white sheet. Mint outer body. No ticks or tiny writing.",
+      "original": "originals/plan.png",
+      "generated_file": "exec-92f4cbdb-9fc0-41db-befb-8e8dd699fb6a.png"
+    },
+    {
+      "key": "recognize",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: A front-facing compact camera: one mint rounded rectangular body, one big icy off-white circular lens with dark teal center, a simple top shutter bump. No glints or small details.",
+      "original": "originals/recognize.png",
+      "generated_file": "exec-545a63b0-92fe-46ec-a1b7-af8bbae2d6b9.png"
+    },
+    {
+      "key": "new_list",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: One icy off-white document page with a mint folded top-right corner and a single large bold dark-teal plus sign in the center. No lines of text.",
+      "original": "originals/new_list.png",
+      "generated_file": "exec-9e62e392-5726-416a-862b-16f35172143b.png"
+    },
+    {
+      "key": "shopping",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: One mint shopping basket seen from the front, wide rounded trapezoid, bold dark-teal rim and single arch handle, exactly two broad vertical slots. Empty basket, no food.",
+      "original": "originals/shopping.png",
+      "generated_file": "exec-254e70ae-a3e8-476f-8e5a-7d52fbe75d62.png"
+    },
+    {
+      "key": "recipe",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: One open recipe book from the front, two large icy off-white pages, mint thick cover beneath, a bold dark-teal center crease and exactly one thick horizontal line per page. No letters or food.",
+      "original": "originals/recipe.png",
+      "generated_file": "exec-a5cba78b-488b-4108-9358-9d7682d83e30.png"
+    },
+    {
+      "key": "alternatives",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: Two chunky mint curved arrows chasing each other around one open circular gap, clockwise swap/refresh symbol. Exactly two arrowheads, plenty of negative space, bold dark teal contour. No disk behind.",
+      "original": "originals/alternatives.png",
+      "generated_file": "exec-91d09cb6-704c-4fb6-8020-24597ea7c2ce.png"
+    },
+    {
+      "key": "refine",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: A single short chunky mint pencil diagonally pointing down-left, broad off-white tip with dark-teal lead, simple dark-teal outer contour. No sheet, text, tiny bands or shadows.",
+      "original": "originals/refine.png",
+      "generated_file": "exec-a1c73d7a-d454-409c-b69e-152bcbd63c75.png"
+    },
+    {
+      "key": "profile",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: A generic person silhouette: one mint circular head separated by a clear gap from broad mint rounded shoulders, dark teal bold outlines. No face, hair, clothes or enclosed background circle.",
+      "original": "originals/profile.png",
+      "generated_file": "exec-b551cc6b-630d-4ff1-ab2d-05064ea1a559.png"
+    },
+    {
+      "key": "save",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: A single large mint check mark / tick with bold dark teal outline, wide rounded arms, one tiny broad icy accent allowed. No disk, checkbox or background shape.",
+      "original": "originals/save.png",
+      "generated_file": "exec-e82e2faf-3a05-4139-9f19-fd92bc61b206.png"
+    },
+    {
+      "key": "calendar",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: A simple square calendar with rounded corners, mint header, two dark teal binding tabs, icy off-white face and exactly four large dark teal square day cells arranged 2 by 2. No numbers or letters.",
+      "original": "originals/calendar.png",
+      "generated_file": "exec-1127014e-eff1-4275-9a68-9531c9785973.png"
+    },
+    {
+      "key": "previous",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: One single broad mint LEFT-pointing horizontal arrow, big triangular head facing LEFT with thick short horizontal shaft extending to the RIGHT. Dark teal bold outline and rounded corners, no disk or background tile. Arrow points left, not right.",
+      "original": "originals/previous.png",
+      "generated_file": "exec-4f0bcc43-6042-4428-bb3c-fd6b50aeb310.png"
+    },
+    {
+      "key": "next",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: One single broad mint RIGHT-pointing horizontal arrow, big triangular head facing RIGHT with thick short horizontal shaft extending to the LEFT. Dark teal bold outline and rounded corners, no disk or background tile. Arrow points right, not left.",
+      "original": "originals/next.png",
+      "generated_file": "exec-da14ef0d-0749-44b9-9f4a-37f48c50821c.png"
+    },
+    {
+      "key": "back",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: One single mint U-turn return arrow, smooth broad curve rising on the right and turning LEFT at the top into a large left-pointing arrowhead. Dark teal bold contour. Clear open middle, no disk or tile.",
+      "original": "originals/back.png",
+      "generated_file": "exec-296c6e84-7ff6-4e67-8779-b4c334d49d60.png"
+    },
+    {
+      "key": "home",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: A single mint house silhouette with a broad triangular roof, square body, one large icy off-white rectangular doorway. Very dark teal thick outline. No windows, chimney, plants or decorations.",
+      "original": "originals/home.png",
+      "generated_file": "exec-c4d77890-331b-4380-90e7-682661e1fb8d.png"
+    },
+    {
+      "key": "help",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: A single large chunky mint question-mark symbol with a separate round mint dot beneath, thick dark teal outline on both. Keep large gap between curve and dot, no enclosing circle or tile.",
+      "original": "originals/help.png",
+      "generated_file": "exec-63cda712-0fed-4b8d-9f76-cb263ba3a6df.png"
+    },
+    {
+      "key": "privacy",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: A single mint shield with rounded top corners and bottom point. One large icy off-white vertical keyhole shape in the center, dark teal bold contour and keyhole outline. No lock overlay or decorations.",
+      "original": "originals/privacy.png",
+      "generated_file": "exec-612ed93f-f31f-4533-a49a-7cf71b9e97d5.png"
+    },
+    {
+      "key": "delete",
+      "prompt": "Use case: logo-brand. Create ONE standalone minimalist Telegram custom emoji. IMAGE 1 is style/palette reference ONLY; replace its fridge subject completely with the subject below. Match its simple broad shapes, cool mint #91D9BF, icy off-white #E9F7F2, very dark teal #173F39 thick contour, rounded joins, simple flat pictogram look. Optimize for recognition at 20px. Contour and strokes at least 5 percent of object width. Only 2-3 large shapes and necessary semantic details. No faces, 3D perspective, textures, complex shading, shadows, sparkles, letters, words, numbers, badge, tile or border. Actual transparent alpha background, no checkerboard. Centered square composition, object occupies 82-86 percent with safe padding, no clipping. Subject: A single simple mint trash bin with rounded lower corners, bold dark teal outline, separate broad mint lid with one small rectangular handle, exactly two broad dark teal vertical slots. No recycling symbol or other marks.",
+      "original": "originals/delete.png",
+      "generated_file": "exec-fe6c66ed-44ab-41f0-aac3-9d820f18bf6d.png"
+    }
+  ]
+}

@@ -3,6 +3,7 @@ import asyncio
 import pytest
 
 from holodos_bot.bot import Bot, normalize_update
+from holodos_bot.button_icons import decorate
 from holodos_bot.config import Config
 from holodos_bot.providers import ProviderError
 from holodos_bot.store import Store
@@ -296,6 +297,8 @@ def test_help_privacy_delete_navigation_and_menu(tmp_path):
             store.finish(job)
             return telegram.sent[-1][1]
         def actions(message):
+            decorated = decorate(message['reply_markup'])
+            assert all(b.get('icon_custom_emoji_id') for row in decorated['inline_keyboard'] for b in row)
             return {b['callback_data'].split(':')[2]: b['text']
                     for row in message['reply_markup']['inline_keyboard'] for b in row}
         help_message = await handle(1, '/help')

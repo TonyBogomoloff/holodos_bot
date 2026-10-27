@@ -2,24 +2,27 @@
 
 from copy import deepcopy
 
-# Published set: https://t.me/addemoji/HolodosOrange20261025_by_holodos_recept_bot
+# Published set: https://t.me/addemoji/HolodosMint20261027_by_holodos_recept_bot
 ICONS = {
-    "dish": "5399867664623509428",
-    "fridge": "5399981116184635470",
-    "plan": "5399937784259585027",
-    "recognize": "5400007964025203427",
-    "new_list": "5399956956993595568",
-    "shopping": "5397712252465884659",
-    "recipe": "5400074875320707188",
-    "alternatives": "5400284903516448045",
-    "refine": "5400068063502576562",
-    "profile": "5398113136123359309",
-    "save": "5400375076354826615",
-    "calendar": "5398122091130171961",
-    "previous": "5399918817684006576",
-    "next": "5400073651255027590",
-    "back": "5400010455106235269",
-    "home": "5400102809787999353",
+    "dish": "5404820582254555032",
+    "fridge": "5404565349528023913",
+    "plan": "5404588031250311328",
+    "recognize": "5404736735903002466",
+    "new_list": "5404708968939433893",
+    "shopping": "5404816356006734980",
+    "recipe": "5404855874000827684",
+    "alternatives": "5404641374744126678",
+    "refine": "5404520269551280347",
+    "profile": "5404835086359115551",
+    "save": "5404554929937361724",
+    "calendar": "5406951710667089127",
+    "previous": "5406845882672914056",
+    "next": "5404545493894211166",
+    "back": "5404577542940173434",
+    "home": "5404485420186643823",
+    "help": "5404543148842068899",
+    "privacy": "5404820118398082751",
+    "delete": "5404639248735317743"
 }
 
 ACTION_ICONS = {
@@ -43,6 +46,9 @@ ACTION_ICONS = {
     "home": "home",
     "profileback": "back",
     "choices": "back",
+    "help": "help",
+    "privacy": "privacy",
+    "delete": "delete",
 }
 
 
@@ -54,7 +60,7 @@ def icon_key(button):
         return "home"
     parts = button.get("callback_data", "").split(":")
     action = parts[2] if len(parts) > 2 else ""
-    if action == "page":
+    if action in {"page", "screen"}:
         return "previous" if text.startswith("←") else "next"
     return ACTION_ICONS.get(action)
 
